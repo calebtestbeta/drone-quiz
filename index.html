@@ -297,7 +297,7 @@
                 <span class="text-2xl font-bold text-slate-100">{{Math.min(qCount,maxQ)}} 題</span>
                 <span class="text-sm text-slate-400">最多 {{maxQ}}</span>
               </div>
-              <input type="range" v-model.number="qCount" :min="10" :max="maxQ" step="5" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+              <input type="range" v-model.number="qCount" :min="10" :max="maxQ" step="1" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
               <div class="flex justify-between text-xs text-slate-500 mt-1"><span>10</span><span>{{maxQ}}</span></div>
             </div>
           </div>
@@ -486,6 +486,8 @@
     props: ['params','onSave','nav'],
     setup(p) {
       const { type, questions, answers, total, score, timeUp, duration, showExp } = p.params;
+      const chapters = p.params.chapters;
+      const count = p.params.count;
       onMounted(() => p.onSave({ id:'s'+Date.now(), type, total, score, duration, timeUp, at: Date.now() }));
       const pct = computed(() => total>0?Math.round(score/total*100):0);
       const passed = computed(() => pct.value>=70);
@@ -501,7 +503,7 @@
       });
       const wrong = computed(() => questions.filter(q=>answers[q.gid]&&answers[q.gid]!==q.answer));
       const noAns = computed(() => questions.filter(q=>!answers[q.gid]).length);
-      return { pct, passed, dur, byChapter, wrong, noAns, type, showExp };
+      return { pct, passed, dur, byChapter, wrong, noAns, type, showExp, chapters, count };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -552,7 +554,7 @@
       <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3 space-y-2">
         <button v-if="wrong.length>0" @click="nav('setup',{type:'wrong'})" class="w-full bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/50 text-amber-300 py-3 rounded-xl text-sm font-medium transition-colors">複習本次錯題（{{wrong.length}} 題）</button>
         <div class="flex gap-2">
-          <button @click="nav('setup',{type,chapters:params.chapters,count:params.count})" class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 py-3 rounded-xl text-sm font-medium text-slate-300">再練一次</button>
+          <button @click="nav('setup',{type,chapters,count})" class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 py-3 rounded-xl text-sm font-medium text-slate-300">再練一次</button>
           <button @click="nav('home')" class="flex-1 bg-blue-600 hover:bg-blue-500 py-3 rounded-xl text-sm font-semibold text-white">回首頁</button>
         </div>
       </div>
