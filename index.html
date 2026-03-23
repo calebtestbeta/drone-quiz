@@ -1,0 +1,787 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="theme-color" content="#0f172a">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="無人機練習">
+  <title>無人機考試練習</title>
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      safelist: [
+        'border-green-500','bg-green-900/40','text-green-300','bg-green-900/20','border-green-700/50','text-green-400','border-green-800/50','bg-green-900/50',
+        'border-red-500','bg-red-900/40','text-red-300','bg-red-900/20','border-red-800/50','text-red-400',
+        'border-blue-500','bg-blue-900/30','text-blue-300','bg-blue-900/40','border-blue-700/50',
+        'border-amber-700/50','bg-amber-900/20','text-amber-400','bg-amber-600/20','bg-amber-600/30','border-amber-600/50','text-amber-300',
+        'text-slate-500','bg-slate-800/50','animate-pulse',
+        'bg-purple-900/50','bg-red-900/50','bg-red-600','hover:bg-red-500','hover:bg-red-900/30',
+      ]
+    }
+  </script>
+  <style>
+    html, body { height: 100%; overflow: hidden; }
+    body { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+    .safe-bottom { padding-bottom: max(env(safe-area-inset-bottom), 8px); }
+    .fade-enter-active, .fade-leave-active { transition: opacity 0.15s ease; }
+    .fade-enter-from, .fade-leave-to { opacity: 0; }
+    ::-webkit-scrollbar { width: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 2px; }
+    input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 20px; height: 20px; border-radius: 50%; background: #3b82f6; cursor: pointer; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100">
+  <div id="app" class="h-full flex flex-col"></div>
+
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <script>
+  const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted } = Vue;
+
+  // ── Storage helpers ──────────────────────────────────────────
+  const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
+  const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+  // ── Chapter metadata ─────────────────────────────────────────
+  const CHAPTERS = [
+    { num: 1, name: '民用航空法及相關法規', short: '法規', total: 146 },
+    { num: 2, name: '飛航安全及飛行原理',   short: '飛行原理', total: 234 },
+    { num: 3, name: '氣象學',               short: '氣象', total: 129 },
+    { num: 4, name: '人為因素及飛行決策',   short: '人為因素', total: 79 },
+  ];
+
+  // ── Questions cache & loader ──────────────────────────────────
+  const qCache = {};
+  async function loadChapters(nums) {
+    await Promise.all(nums.filter(n => !qCache[n]).map(async n => {
+      const r = await fetch(`exam_ch${n}.json`);
+      const d = await r.json();
+      qCache[n] = d.map(q => ({ ...q, gid: `${q.chapter}_${q.id}` }));
+    }));
+    return nums.flatMap(n => qCache[n] || []);
+  }
+  function shuffle(a) {
+    const b = [...a];
+    for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; }
+    return b;
+  }
+
+  // ── useProgress ───────────────────────────────────────────────
+  function useProgress() {
+    const prog = ref(load('dq_progress', {}));
+    const wrong = ref(load('dq_wrong', []));
+    function record(gid, sel, ans) {
+      const e = prog.value[gid] || { attempts: 0, correct: 0 };
+      const ok = sel === ans;
+      prog.value[gid] = { attempts: e.attempts + 1, correct: e.correct + (ok ? 1 : 0), last: sel, ok, at: Date.now() };
+      save('dq_progress', prog.value);
+      if (!ok && !wrong.value.includes(gid)) { wrong.value.push(gid); save('dq_wrong', wrong.value); }
+    }
+    function chStat(n) {
+      const es = Object.entries(prog.value).filter(([k]) => k.startsWith(n + '_'));
+      const t = es.length, c = es.filter(([, v]) => v.ok).length;
+      return { t, c, pct: t > 0 ? Math.round(c / t * 100) : 0, cov: Math.round(t / (CHAPTERS[n-1]?.total || 1) * 100) };
+    }
+    function clearAll() { prog.value = {}; wrong.value = []; save('dq_progress', {}); save('dq_wrong', []); }
+    return { prog, wrong, record, chStat, clearAll };
+  }
+
+  // ── useSessions ───────────────────────────────────────────────
+  function useSessions() {
+    const sessions = ref(load('dq_sessions', []));
+    function addSession(s) {
+      sessions.value.unshift(s);
+      if (sessions.value.length > 50) sessions.value.length = 50;
+      save('dq_sessions', sessions.value);
+    }
+    function clearAll() { sessions.value = []; save('dq_sessions', []); }
+    return { sessions, addSession, clearAll };
+  }
+
+  // ── useSettings ───────────────────────────────────────────────
+  function useSettings() {
+    const defaults = { exam_min: 60, exam_count: 60, show_exp: true };
+    const cfg = ref(load('dq_settings', defaults));
+    function persist() { save('dq_settings', cfg.value); }
+    return { cfg, persist };
+  }
+
+  // ── useTimer ──────────────────────────────────────────────────
+  function useTimer() {
+    const rem = ref(0); const active = ref(false); let tid = null;
+    const fmt = s => `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+    const display = computed(() => fmt(rem.value));
+    const warn = computed(() => rem.value <= 300 ? 'crit' : rem.value <= 600 ? 'warn' : 'ok');
+    function start(sec, onDone) {
+      rem.value = sec; active.value = true;
+      tid = setInterval(() => { if (--rem.value <= 0) { stop(); onDone(); } }, 1000);
+    }
+    function stop() { clearInterval(tid); tid = null; active.value = false; }
+    return { rem, active, display, warn, start, stop };
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // VIEW: HomeView
+  // ════════════════════════════════════════════════════════════════
+  const HomeView = {
+    props: ['prog','wrong','nav'],
+    setup(p) {
+      const overall = computed(() => {
+        const vals = Object.values(p.prog);
+        const t = vals.length, c = vals.filter(v=>v.ok).length;
+        return { t, c, pct: t ? Math.round(c/t*100) : 0 };
+      });
+      const chs = computed(() => CHAPTERS.map(ch => {
+        const es = Object.entries(p.prog).filter(([k])=>k.startsWith(ch.num+'_'));
+        const t = es.length, c = es.filter(([,v])=>v.ok).length;
+        return { ...ch, ans: t, cor: c, pct: t ? Math.round(c/t*100) : 0, cov: Math.round(t/ch.total*100) };
+      }));
+      return { overall, chs, wc: computed(()=>p.wrong.length) };
+    },
+    template: `
+    <div class="flex flex-col h-full">
+      <div class="flex-shrink-0 bg-slate-900 border-b border-slate-800 px-4 py-4">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-xl">🚁</div>
+          <div>
+            <h1 class="text-lg font-bold">無人機考試練習</h1>
+            <p class="text-xs text-slate-400">台灣遙控無人機操作證學科</p>
+          </div>
+        </div>
+      </div>
+      <div class="flex-1 overflow-y-auto">
+        <div class="px-4 py-4 grid grid-cols-3 gap-3">
+          <div class="bg-slate-900 rounded-xl p-3 text-center">
+            <div class="text-2xl font-bold text-blue-400">{{overall.t}}</div>
+            <div class="text-xs text-slate-400 mt-0.5">已作答</div>
+          </div>
+          <div class="bg-slate-900 rounded-xl p-3 text-center">
+            <div class="text-2xl font-bold text-green-400">{{overall.pct}}%</div>
+            <div class="text-xs text-slate-400 mt-0.5">正確率</div>
+          </div>
+          <div class="bg-slate-900 rounded-xl p-3 text-center">
+            <div class="text-2xl font-bold text-amber-400">{{wc}}</div>
+            <div class="text-xs text-slate-400 mt-0.5">錯題數</div>
+          </div>
+        </div>
+        <div class="px-4 pb-4">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">開始練習</p>
+          <div class="space-y-2.5">
+            <button @click="nav('setup',{type:'chapter_seq'})" class="w-full bg-slate-900 hover:bg-slate-800 active:scale-[0.98] border border-slate-800 rounded-xl p-4 text-left transition-all">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-blue-900/50 rounded-lg flex items-center justify-center text-xl">📖</div>
+                <div class="flex-1 min-w-0">
+                  <div class="font-semibold">章節循序練習</div>
+                  <div class="text-sm text-slate-400">依章節順序作答，答錯顯示說明</div>
+                </div>
+                <svg class="w-5 h-5 text-slate-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              </div>
+            </button>
+            <button @click="nav('setup',{type:'random'})" class="w-full bg-slate-900 hover:bg-slate-800 active:scale-[0.98] border border-slate-800 rounded-xl p-4 text-left transition-all">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-purple-900/50 rounded-lg flex items-center justify-center text-xl">🎲</div>
+                <div class="flex-1 min-w-0">
+                  <div class="font-semibold">隨機抽題練習</div>
+                  <div class="text-sm text-slate-400">隨機出題，測試全面理解</div>
+                </div>
+                <svg class="w-5 h-5 text-slate-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              </div>
+            </button>
+            <button @click="nav('setup',{type:'timed'})" class="w-full bg-slate-900 hover:bg-slate-800 active:scale-[0.98] border border-slate-800 rounded-xl p-4 text-left transition-all">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-amber-900/50 rounded-lg flex items-center justify-center text-xl">⏱️</div>
+                <div class="flex-1 min-w-0">
+                  <div class="font-semibold">限時模擬考試</div>
+                  <div class="text-sm text-slate-400">計時作答，模擬真實考試情境</div>
+                </div>
+                <svg class="w-5 h-5 text-slate-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              </div>
+            </button>
+            <button @click="wc>0&&nav('setup',{type:'wrong'})" :disabled="wc===0" :class="wc===0?'opacity-40 cursor-not-allowed':'hover:bg-slate-800 active:scale-[0.98]'" class="w-full bg-slate-900 border border-slate-800 rounded-xl p-4 text-left transition-all">
+              <div class="flex items-center gap-3">
+                <div class="w-10 h-10 bg-red-900/50 rounded-lg flex items-center justify-center text-xl">🔁</div>
+                <div class="flex-1 min-w-0">
+                  <div class="font-semibold">錯題複習</div>
+                  <div class="text-sm text-slate-400">{{wc>0?wc+' 題待複習':'目前沒有錯題'}}</div>
+                </div>
+                <svg class="w-5 h-5 text-slate-600 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+              </div>
+            </button>
+          </div>
+        </div>
+        <div class="px-4 pb-6">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">章節進度</p>
+          <div class="space-y-2">
+            <div v-for="ch in chs" :key="ch.num" class="bg-slate-900 rounded-xl p-3">
+              <div class="flex justify-between items-center mb-2">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded font-mono">CH{{ch.num}}</span>
+                  <span class="text-sm font-medium">{{ch.short}}</span>
+                </div>
+                <div class="text-sm text-slate-400">
+                  <span class="text-slate-200 font-medium">{{ch.ans}}</span>/{{ch.total}}
+                  <span v-if="ch.ans>0" class="ml-2 font-semibold" :class="ch.pct>=70?'text-green-400':'text-amber-400'">{{ch.pct}}%</span>
+                </div>
+              </div>
+              <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full rounded-full transition-all duration-500" :class="ch.pct>=70?'bg-green-500':ch.ans>0?'bg-amber-500':'bg-blue-500'" :style="{width:Math.max(ch.cov,ch.ans>0?2:0)+'%'}"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>`
+  };
+
+  // ════════════════════════════════════════════════════════════════
+  // VIEW: SetupView
+  // ════════════════════════════════════════════════════════════════
+  const SetupView = {
+    props: ['params','wrong','cfg','nav'],
+    setup(p) {
+      const type = p.params.type;
+      const selCh = ref(type==='wrong'?[]:[1,2,3,4]);
+      const qCount = ref(type==='timed'?p.cfg.exam_count:20);
+      const info = { chapter_seq:{icon:'📖',title:'章節循序練習'}, random:{icon:'🎲',title:'隨機抽題練習'}, timed:{icon:'⏱️',title:'限時模擬考試'}, wrong:{icon:'🔁',title:'錯題複習'} };
+      const avail = computed(()=> type==='wrong'?p.wrong.length : CHAPTERS.filter(c=>selCh.value.includes(c.num)).reduce((s,c)=>s+c.total,0));
+      const maxQ = computed(()=>Math.min(avail.value, type==='timed'?100:200));
+      const canStart = computed(()=> type==='wrong'?p.wrong.length>0:selCh.value.length>0);
+
+      function toggleCh(n) {
+        const i = selCh.value.indexOf(n);
+        if (i>=0) { if(selCh.value.length>1) selCh.value.splice(i,1); }
+        else { selCh.value.push(n); selCh.value.sort((a,b)=>a-b); }
+      }
+      function start() {
+        const count = type==='chapter_seq'?null : type==='wrong'?p.wrong.length : Math.min(qCount.value, avail.value);
+        p.nav('quiz',{ type, chapters: type==='wrong'?[]:selCh.value, count, timeSec: type==='timed'?p.cfg.exam_min*60:0, showExp: type!=='timed' });
+      }
+      return { type, selCh, qCount, info, avail, maxQ, canStart, toggleCh, start, CHAPTERS };
+    },
+    template: `
+    <div class="flex flex-col h-full">
+      <div class="flex-shrink-0 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center gap-3">
+        <button @click="nav('home')" class="p-1 text-slate-400 hover:text-slate-100">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </button>
+        <h1 class="font-semibold">{{info[type]?.icon}} {{info[type]?.title}}</h1>
+      </div>
+      <div class="flex-1 overflow-y-auto px-4 py-4 space-y-5">
+        <template v-if="type!=='wrong'">
+          <div>
+            <div class="flex justify-between items-center mb-3">
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">選擇章節</p>
+              <button @click="selCh.length===4?selCh.splice(0,3):selCh.splice(0,selCh.length,1,2,3,4)" class="text-xs text-blue-400">{{selCh.length===4?'取消全選':'全選'}}</button>
+            </div>
+            <div class="grid grid-cols-2 gap-2">
+              <button v-for="ch in CHAPTERS" :key="ch.num" @click="toggleCh(ch.num)"
+                :class="selCh.includes(ch.num)?'border-blue-500 bg-blue-900/30 text-blue-300':'border-slate-700 bg-slate-900 text-slate-300'"
+                class="border rounded-xl p-3 text-left transition-colors">
+                <div class="text-xs font-mono text-slate-500 mb-1">CH{{ch.num}}</div>
+                <div class="text-sm font-medium leading-tight">{{ch.short}}</div>
+                <div class="text-xs text-slate-500 mt-1">{{ch.total}} 題</div>
+              </button>
+            </div>
+          </div>
+        </template>
+        <template v-if="type==='random'||type==='timed'">
+          <div>
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">題目數量</p>
+            <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <div class="flex justify-between mb-3">
+                <span class="text-2xl font-bold text-slate-100">{{Math.min(qCount,maxQ)}} 題</span>
+                <span class="text-sm text-slate-400">最多 {{maxQ}}</span>
+              </div>
+              <input type="range" v-model.number="qCount" :min="10" :max="maxQ" step="5" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+              <div class="flex justify-between text-xs text-slate-500 mt-1"><span>10</span><span>{{maxQ}}</span></div>
+            </div>
+          </div>
+        </template>
+        <template v-if="type==='wrong'">
+          <div class="bg-red-900/20 border border-red-800/50 rounded-xl p-4">
+            <div class="text-lg font-bold text-red-300">{{wrong.length}} 題錯題</div>
+            <p class="text-sm text-slate-400 mt-1">將練習所有曾答錯的題目</p>
+          </div>
+        </template>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2.5">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">練習摘要</p>
+          <div v-if="type!=='wrong'" class="flex justify-between text-sm"><span class="text-slate-400">章節</span><span>第 {{selCh.join('、')}} 章</span></div>
+          <div class="flex justify-between text-sm"><span class="text-slate-400">題目數</span><span>{{type==='chapter_seq'?avail:type==='wrong'?wrong.length:Math.min(qCount,maxQ)}} 題</span></div>
+          <div class="flex justify-between text-sm"><span class="text-slate-400">計時</span><span>{{type==='timed'?cfg.exam_min+' 分鐘':'不限時'}}</span></div>
+          <div class="flex justify-between text-sm"><span class="text-slate-400">答錯說明</span><span>{{type==='timed'?'完成後顯示':'即時顯示'}}</span></div>
+        </div>
+      </div>
+      <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3">
+        <button @click="start" :disabled="!canStart" :class="canStart?'bg-blue-600 hover:bg-blue-500':'bg-slate-700 opacity-50 cursor-not-allowed'" class="w-full py-4 rounded-xl font-semibold text-white text-base transition-colors">開始練習</button>
+      </div>
+    </div>`
+  };
+
+  // ════════════════════════════════════════════════════════════════
+  // VIEW: QuizView
+  // ════════════════════════════════════════════════════════════════
+  const QuizView = {
+    props: ['params','wrong','onRecord','nav'],
+    setup(p) {
+      const { type, chapters, count, timeSec, showExp } = p.params;
+      const loading = ref(true);
+      const errMsg = ref('');
+      const qs = ref([]);
+      const idx = ref(0);
+      const ans = ref({});
+      const startAt = ref(Date.now());
+      const showExit = ref(false);
+      const timer = useTimer();
+
+      const q = computed(() => qs.value[idx.value]);
+      const sel = computed(() => q.value ? ans.value[q.value.gid] : null);
+      const correct = computed(() => q.value?.answer);
+      const answered = computed(() => !!sel.value);
+      const isOk = computed(() => answered.value && sel.value === correct.value);
+      const progress = computed(() => ({ cur: idx.value+1, tot: qs.value.length, donePct: Math.round(Object.keys(ans.value).length/Math.max(qs.value.length,1)*100) }));
+
+      onMounted(async () => {
+        try {
+          let list;
+          if (type === 'wrong') {
+            const all = await loadChapters([1,2,3,4]);
+            const wset = new Set(p.wrong);
+            list = all.filter(q => wset.has(q.gid));
+          } else if (type === 'chapter_seq') {
+            list = await loadChapters(chapters);
+          } else {
+            const pool = await loadChapters(chapters);
+            list = shuffle(pool).slice(0, count);
+          }
+          qs.value = list;
+          if (timeSec > 0) timer.start(timeSec, () => finish(true));
+          loading.value = false;
+        } catch(e) {
+          errMsg.value = '載入失敗，請確認在 HTTP 伺服器環境下開啟';
+          loading.value = false;
+        }
+      });
+      onUnmounted(() => timer.stop());
+
+      function pick(opt) {
+        if (answered.value) return;
+        ans.value[q.value.gid] = opt;
+        p.onRecord(q.value.gid, opt, correct.value);
+        if (!showExp) setTimeout(advance, 250);
+        else if (opt !== correct.value) navigator.vibrate?.(50);
+      }
+
+      function advance() {
+        if (idx.value < qs.value.length - 1) idx.value++;
+        else finish(false);
+      }
+
+      function back() { if (idx.value > 0) idx.value--; }
+
+      function finish(timeUp) {
+        timer.stop();
+        const total = qs.value.length;
+        const score = qs.value.filter(q => ans.value[q.gid] === q.answer).length;
+        p.nav('result', { type, questions: qs.value, answers: ans.value, total, score, timeUp,
+          duration: Math.floor((Date.now()-startAt.value)/1000), showExp });
+      }
+
+      function optCls(opt) {
+        if (!answered.value) return 'border-slate-700 bg-slate-800 hover:bg-slate-700 hover:border-slate-500 text-slate-100 cursor-pointer';
+        if (opt === correct.value) return 'border-green-500 bg-green-900/40 text-green-300 cursor-default';
+        if (opt === sel.value) return 'border-red-500 bg-red-900/40 text-red-300 cursor-default';
+        return 'border-slate-700 bg-slate-800/50 text-slate-500 cursor-default';
+      }
+
+      const timerCls = computed(() => ({ ok:'text-slate-300', warn:'text-amber-400', crit:'text-red-400 animate-pulse' }[timer.warn.value]));
+
+      return { loading, errMsg, qs, idx, ans, q, sel, correct, answered, isOk, progress, timer, timerCls, showExit, type, showExp, pick, advance, back, finish, optCls };
+    },
+    template: `
+    <div class="flex flex-col h-full">
+      <div v-if="loading" class="flex-1 flex items-center justify-center">
+        <div class="text-center"><div class="text-4xl mb-3">📚</div><p class="text-slate-400">載入題目中…</p></div>
+      </div>
+      <div v-else-if="errMsg" class="flex-1 flex items-center justify-center px-6 text-center">
+        <div><div class="text-4xl mb-3">⚠️</div><p class="text-slate-300 font-medium mb-2">{{errMsg}}</p>
+        <button @click="nav('home')" class="bg-blue-600 px-6 py-2 rounded-lg text-white mt-2">返回首頁</button></div>
+      </div>
+      <template v-else>
+        <div class="flex-shrink-0 bg-slate-900 border-b border-slate-800 px-4 pt-3 pb-2">
+          <div class="flex items-center justify-between mb-2">
+            <button @click="showExit=true" class="p-1 text-slate-400 hover:text-slate-100">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+            <span class="text-sm text-slate-400 font-medium">{{progress.cur}} / {{progress.tot}}</span>
+            <div v-if="timer.active.value" :class="timerCls" class="font-mono text-sm font-bold w-14 text-right">{{timer.display.value}}</div>
+            <div v-else class="w-14"></div>
+          </div>
+          <div class="h-1 bg-slate-800 rounded-full overflow-hidden">
+            <div class="h-full bg-blue-500 rounded-full transition-all duration-300" :style="{width:progress.donePct+'%'}"></div>
+          </div>
+        </div>
+        <div class="flex-1 overflow-y-auto">
+          <div class="px-4 pt-4 pb-20" v-if="q">
+            <div class="flex items-center gap-2 mb-3">
+              <span class="text-xs bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono">CH{{q.chapter}}</span>
+              <span class="text-xs text-slate-500 truncate">{{q.chapter_name}}</span>
+            </div>
+            <p class="text-base text-slate-100 leading-relaxed mb-5">{{q.question}}</p>
+            <div class="space-y-2.5">
+              <button v-for="opt in ['A','B','C','D']" :key="opt" @click="pick(opt)" :class="optCls(opt)" class="w-full border rounded-xl px-4 py-3.5 text-left transition-all duration-150 flex gap-3 items-start">
+                <span class="flex-shrink-0 w-6 h-6 rounded-full border text-xs font-bold flex items-center justify-center mt-0.5" :class="answered&&opt===correct?'border-green-500 text-green-300 bg-green-900/50':answered&&opt===sel?'border-red-500 text-red-300 bg-red-900/50':'border-current'">{{opt}}</span>
+                <span class="text-sm leading-relaxed flex-1">{{q.options[opt]}}</span>
+                <svg v-if="answered&&opt===correct" class="flex-shrink-0 w-5 h-5 text-green-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                <svg v-if="answered&&opt===sel&&opt!==correct" class="flex-shrink-0 w-5 h-5 text-red-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <transition name="fade">
+              <div v-if="answered&&showExp&&q.explanation" :class="isOk?'border-green-700/50 bg-green-900/20':'border-amber-700/50 bg-amber-900/20'" class="mt-4 border rounded-xl p-4">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-lg">{{isOk?'✅':'💡'}}</span>
+                  <span :class="isOk?'text-green-400':'text-amber-400'" class="text-sm font-semibold">{{isOk?'答對了！':'解題說明'}}</span>
+                </div>
+                <p class="text-sm text-slate-300 leading-relaxed">{{q.explanation}}</p>
+              </div>
+            </transition>
+          </div>
+        </div>
+        <div class="absolute bottom-0 left-0 right-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3">
+          <div class="flex gap-2.5 max-w-2xl mx-auto">
+            <button v-if="showExp" @click="back" :disabled="idx===0" :class="idx===0?'opacity-30 cursor-not-allowed':'hover:bg-slate-700'" class="flex-none w-12 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-center transition-colors">
+              <svg class="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+            </button>
+            <button @click="advance" :class="(answered||!showExp)?'bg-blue-600 hover:bg-blue-500 text-white font-semibold':'bg-slate-800 border border-slate-700 text-slate-500'" class="flex-1 rounded-xl py-3.5 text-sm transition-colors flex items-center justify-center gap-2">
+              {{idx===qs.length-1?'完成答題':'下一題'}}
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+            </button>
+          </div>
+        </div>
+      </template>
+      <transition name="fade">
+        <div v-if="showExit" class="fixed inset-0 bg-black/70 flex items-end justify-center z-50" @click.self="showExit=false">
+          <div class="bg-slate-900 border border-slate-700 rounded-t-2xl w-full max-w-lg p-6 pb-safe">
+            <h3 class="text-lg font-semibold mb-2">確定離開？</h3>
+            <p class="text-sm text-slate-400 mb-5">目前答題進度不會保存</p>
+            <div class="flex gap-3">
+              <button @click="showExit=false" class="flex-1 bg-slate-800 border border-slate-700 py-3 rounded-xl text-slate-300 font-medium hover:bg-slate-700">繼續答題</button>
+              <button @click="nav('home')" class="flex-1 bg-red-600 hover:bg-red-500 py-3 rounded-xl text-white font-medium">離開</button>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </div>`
+  };
+
+  // ════════════════════════════════════════════════════════════════
+  // VIEW: ResultView
+  // ════════════════════════════════════════════════════════════════
+  const ResultView = {
+    props: ['params','onSave','nav'],
+    setup(p) {
+      const { type, questions, answers, total, score, timeUp, duration, showExp } = p.params;
+      onMounted(() => p.onSave({ id:'s'+Date.now(), type, total, score, duration, timeUp, at: Date.now() }));
+      const pct = computed(() => total>0?Math.round(score/total*100):0);
+      const passed = computed(() => pct.value>=70);
+      const dur = computed(() => { const m=Math.floor(duration/60),s=duration%60; return m>0?`${m} 分 ${s} 秒`:`${s} 秒`; });
+      const byChapter = computed(() => {
+        const m = {};
+        questions.forEach(q => {
+          if (!m[q.chapter]) m[q.chapter] = { total:0, cor:0, name:q.chapter_name };
+          m[q.chapter].total++;
+          if (answers[q.gid]===q.answer) m[q.chapter].cor++;
+        });
+        return Object.entries(m).map(([ch,v])=>({ ch:+ch, ...v, pct:Math.round(v.cor/v.total*100) }));
+      });
+      const wrong = computed(() => questions.filter(q=>answers[q.gid]&&answers[q.gid]!==q.answer));
+      const noAns = computed(() => questions.filter(q=>!answers[q.gid]).length);
+      return { pct, passed, dur, byChapter, wrong, noAns, type, showExp };
+    },
+    template: `
+    <div class="flex flex-col h-full">
+      <div class="flex-shrink-0 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center">
+        <h1 class="font-semibold flex-1">答題結果</h1>
+        <button @click="nav('home')" class="text-sm text-blue-400 hover:text-blue-300">回首頁</button>
+      </div>
+      <div class="flex-1 overflow-y-auto">
+        <div class="px-4 py-6 text-center">
+          <div class="text-6xl font-bold mb-1" :class="passed?'text-green-400':'text-amber-400'">{{pct}}%</div>
+          <div class="text-lg font-medium" :class="passed?'text-green-300':'text-amber-300'">{{passed?'通過！':'繼續加油！'}}</div>
+          <p class="text-slate-400 text-sm mt-2">{{params.score}} / {{params.total}} 題答對<span v-if="noAns>0" class="text-slate-500 ml-1">（{{noAns}} 未作答）</span></p>
+          <p v-if="params.timeUp" class="text-red-400 text-xs mt-1">⏱️ 時間到，自動提交</p>
+          <p class="text-slate-500 text-xs mt-1">耗時 {{dur}}</p>
+        </div>
+        <div v-if="byChapter.length>1" class="px-4 mb-4">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">各章節成績</p>
+          <div class="space-y-2">
+            <div v-for="r in byChapter" :key="r.ch" class="bg-slate-900 rounded-xl p-3">
+              <div class="flex justify-between items-center mb-2">
+                <div class="flex items-center gap-2">
+                  <span class="text-xs bg-slate-700 px-1.5 py-0.5 rounded font-mono text-slate-300">CH{{r.ch}}</span>
+                  <span class="text-sm text-slate-300">{{r.total}} 題</span>
+                </div>
+                <span class="font-semibold text-sm" :class="r.pct>=70?'text-green-400':'text-amber-400'">{{r.cor}}/{{r.total}} · {{r.pct}}%</span>
+              </div>
+              <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full rounded-full" :class="r.pct>=70?'bg-green-500':'bg-amber-500'" :style="{width:r.pct+'%'}"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="wrong.length>0" class="px-4 mb-6">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">本次錯題（{{wrong.length}} 題）</p>
+          <div class="space-y-3">
+            <div v-for="q in wrong" :key="q.gid" class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+              <p class="text-sm text-slate-300 leading-relaxed mb-2">{{q.question}}</p>
+              <div class="flex gap-2 flex-wrap text-xs mb-2">
+                <span class="bg-red-900/40 text-red-300 border border-red-800/50 px-2 py-0.5 rounded">你選：{{params.answers[q.gid]}}. {{q.options[params.answers[q.gid]]}}</span>
+                <span class="bg-green-900/40 text-green-300 border border-green-800/50 px-2 py-0.5 rounded">正確：{{q.answer}}. {{q.options[q.answer]}}</span>
+              </div>
+              <p v-if="q.explanation&&showExp" class="text-xs text-slate-400 leading-relaxed">{{q.explanation}}</p>
+              <p v-else-if="q.explanation&&!showExp" class="text-xs text-slate-400 leading-relaxed mt-1">💡 {{q.explanation}}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3 space-y-2">
+        <button v-if="wrong.length>0" @click="nav('setup',{type:'wrong'})" class="w-full bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/50 text-amber-300 py-3 rounded-xl text-sm font-medium transition-colors">複習本次錯題（{{wrong.length}} 題）</button>
+        <div class="flex gap-2">
+          <button @click="nav('setup',{type})" class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 py-3 rounded-xl text-sm font-medium text-slate-300">再練一次</button>
+          <button @click="nav('home')" class="flex-1 bg-blue-600 hover:bg-blue-500 py-3 rounded-xl text-sm font-semibold text-white">回首頁</button>
+        </div>
+      </div>
+    </div>`
+  };
+
+  // ════════════════════════════════════════════════════════════════
+  // VIEW: StatsView
+  // ════════════════════════════════════════════════════════════════
+  const StatsView = {
+    props: ['prog','wrong','sessions','nav','onClear'],
+    setup(p) {
+      const confirm = ref(false);
+      const overall = computed(() => {
+        const vs = Object.values(p.prog);
+        const t = vs.length, c = vs.filter(v=>v.ok).length;
+        return { t, c, pct: t?Math.round(c/t*100):0 };
+      });
+      const chs = computed(() => CHAPTERS.map(ch => {
+        const es = Object.entries(p.prog).filter(([k])=>k.startsWith(ch.num+'_'));
+        const t = es.length, c = es.filter(([,v])=>v.ok).length;
+        return { ...ch, t, c, pct: t?Math.round(c/t*100):0, cov: Math.round(t/ch.total*100) };
+      }));
+      const recent = computed(() => p.sessions.slice(0,20));
+      const typeLabel = t => ({ chapter_seq:'章節循序', random:'隨機練習', timed:'限時考試', wrong:'錯題複習' }[t]||t);
+      const fmtDate = ts => new Date(ts).toLocaleDateString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
+      function doClear() { p.onClear(); confirm.value=false; }
+      return { confirm, overall, chs, recent, typeLabel, fmtDate, doClear };
+    },
+    template: `
+    <div class="flex flex-col h-full">
+      <div class="flex-shrink-0 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center gap-3">
+        <button @click="nav('home')" class="p-1 text-slate-400 hover:text-slate-100">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </button>
+        <h1 class="font-semibold">學習統計</h1>
+      </div>
+      <div class="flex-1 overflow-y-auto">
+        <div class="px-4 py-4 grid grid-cols-3 gap-3">
+          <div class="bg-slate-900 rounded-xl p-3 text-center"><div class="text-2xl font-bold text-blue-400">{{overall.t}}</div><div class="text-xs text-slate-400 mt-0.5">已作答</div></div>
+          <div class="bg-slate-900 rounded-xl p-3 text-center"><div class="text-2xl font-bold text-green-400">{{overall.pct}}%</div><div class="text-xs text-slate-400 mt-0.5">正確率</div></div>
+          <div class="bg-slate-900 rounded-xl p-3 text-center"><div class="text-2xl font-bold text-amber-400">{{wrong.length}}</div><div class="text-xs text-slate-400 mt-0.5">錯題數</div></div>
+        </div>
+        <div class="px-4 mb-5">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">各章節統計</p>
+          <div class="space-y-2">
+            <div v-for="ch in chs" :key="ch.num" class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+              <div class="flex justify-between items-start mb-3">
+                <div>
+                  <div class="flex items-center gap-2 mb-0.5">
+                    <span class="text-xs bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded font-mono">CH{{ch.num}}</span>
+                    <span class="font-medium">{{ch.short}}</span>
+                  </div>
+                  <div class="text-xs text-slate-500">{{ch.name}}</div>
+                </div>
+                <span class="text-lg font-bold" :class="ch.pct>=70?'text-green-400':ch.t>0?'text-amber-400':'text-slate-600'">{{ch.t>0?ch.pct+'%':'--'}}</span>
+              </div>
+              <div class="flex gap-4 text-xs text-slate-400 mb-2">
+                <span>作答 <b class="text-slate-200">{{ch.t}}</b>/{{ch.total}}</span>
+                <span>答對 <b class="text-green-400">{{ch.c}}</b></span>
+                <span>覆蓋 <b class="text-slate-200">{{ch.cov}}%</b></span>
+              </div>
+              <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                <div class="h-full rounded-full" :class="ch.pct>=70?'bg-green-500':ch.t>0?'bg-amber-500':'bg-slate-700'" :style="{width:Math.max(ch.cov,ch.t>0?2:0)+'%'}"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div v-if="recent.length>0" class="px-4 mb-6">
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">近期紀錄</p>
+          <div class="space-y-2">
+            <div v-for="s in recent" :key="s.id" class="bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 flex justify-between items-center">
+              <div>
+                <div class="text-sm font-medium">{{typeLabel(s.type)}}</div>
+                <div class="text-xs text-slate-500 mt-0.5">{{fmtDate(s.at)}}</div>
+              </div>
+              <div class="text-right">
+                <div class="font-bold" :class="s.total>0&&Math.round(s.score/s.total*100)>=70?'text-green-400':'text-amber-400'">{{s.total>0?Math.round(s.score/s.total*100)+'%':'--'}}</div>
+                <div class="text-xs text-slate-500">{{s.score}}/{{s.total}}</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3">
+        <button @click="confirm=true" class="w-full bg-red-900/20 hover:bg-red-900/30 border border-red-800/50 text-red-400 py-3 rounded-xl text-sm font-medium">清除所有學習記錄</button>
+      </div>
+      <transition name="fade">
+        <div v-if="confirm" class="fixed inset-0 bg-black/70 flex items-end justify-center z-50" @click.self="confirm=false">
+          <div class="bg-slate-900 border border-slate-700 rounded-t-2xl w-full max-w-lg p-6 pb-safe">
+            <h3 class="text-lg font-semibold mb-2">確定清除？</h3>
+            <p class="text-sm text-slate-400 mb-5">所有記錄、錯題集和考試紀錄將被清除，無法復原。</p>
+            <div class="flex gap-3">
+              <button @click="confirm=false" class="flex-1 bg-slate-800 border border-slate-700 py-3 rounded-xl text-slate-300 font-medium">取消</button>
+              <button @click="doClear" class="flex-1 bg-red-600 hover:bg-red-500 py-3 rounded-xl text-white font-medium">確定清除</button>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </div>`
+  };
+
+  // ════════════════════════════════════════════════════════════════
+  // VIEW: SettingsView
+  // ════════════════════════════════════════════════════════════════
+  const SettingsView = {
+    props: ['cfg','nav','onSave'],
+    setup(p) {
+      const local = ref({ ...p.cfg });
+      function save() { Object.assign(p.cfg, local.value); p.onSave(); p.nav('home'); }
+      return { local, save };
+    },
+    template: `
+    <div class="flex flex-col h-full">
+      <div class="flex-shrink-0 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center gap-3">
+        <button @click="nav('home')" class="p-1 text-slate-400 hover:text-slate-100">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </button>
+        <h1 class="font-semibold">設定</h1>
+      </div>
+      <div class="flex-1 overflow-y-auto px-4 py-4 space-y-5">
+        <div>
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">限時考試設定</p>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl divide-y divide-slate-800">
+            <div class="p-4">
+              <div class="flex justify-between mb-3"><label class="text-sm">考試時間</label><span class="text-sm font-bold text-blue-400">{{local.exam_min}} 分鐘</span></div>
+              <input type="range" v-model.number="local.exam_min" min="30" max="120" step="5" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+              <div class="flex justify-between text-xs text-slate-500 mt-1"><span>30 分</span><span>120 分</span></div>
+            </div>
+            <div class="p-4">
+              <div class="flex justify-between mb-3"><label class="text-sm">考試題數</label><span class="text-sm font-bold text-blue-400">{{local.exam_count}} 題</span></div>
+              <input type="range" v-model.number="local.exam_count" min="20" max="100" step="5" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+              <div class="flex justify-between text-xs text-slate-500 mt-1"><span>20 題</span><span>100 題</span></div>
+            </div>
+          </div>
+        </div>
+        <div>
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">練習設定</p>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 flex justify-between items-center">
+            <div><div class="text-sm">答錯後顯示說明</div><div class="text-xs text-slate-500 mt-0.5">練習模式答錯時即時顯示解題說明</div></div>
+            <button @click="local.show_exp=!local.show_exp" :class="local.show_exp?'bg-blue-600':'bg-slate-700'" class="relative w-11 h-6 rounded-full transition-colors flex-shrink-0">
+              <span :class="local.show_exp?'translate-x-5':'translate-x-1'" class="absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-transform duration-200 block"></span>
+            </button>
+          </div>
+        </div>
+        <div>
+          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">關於</p>
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
+            <p class="text-sm text-slate-400 leading-relaxed">台灣遙控無人機操作證學科考試練習平台，共 588 道題目，涵蓋民用航空法及相關法規、飛航安全及飛行原理、氣象學、人為因素及飛行決策四個章節。</p>
+            <p class="text-xs text-slate-600 mt-3">資料來源：民航局遙控無人機學科考試題庫</p>
+          </div>
+        </div>
+      </div>
+      <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3">
+        <button @click="save" class="w-full bg-blue-600 hover:bg-blue-500 py-3.5 rounded-xl font-semibold text-white">儲存設定</button>
+      </div>
+    </div>`
+  };
+
+  // ════════════════════════════════════════════════════════════════
+  // APP ROOT
+  // ════════════════════════════════════════════════════════════════
+  const App = {
+    setup() {
+      const { prog, wrong, record, clearAll: clearProg } = useProgress();
+      const { sessions, addSession, clearAll: clearSess } = useSessions();
+      const { cfg, persist } = useSettings();
+
+      const view = ref('home');
+      const params = ref(null);
+      const quizKey = ref(0);
+
+      function nav(v, p=null) { params.value=p; view.value=v; if(v==='quiz') quizKey.value++; window.scrollTo(0,0); }
+      function clearAll() { clearProg(); clearSess(); }
+
+      return { view, params, quizKey, nav, prog, wrong, sessions, cfg, record, addSession, persist, clearAll };
+    },
+    template: `
+    <div class="h-full flex lg:flex-row flex-col">
+      <!-- Desktop sidebar -->
+      <div class="hidden lg:flex flex-col w-60 flex-shrink-0 bg-slate-900 border-r border-slate-800 p-4">
+        <div class="flex items-center gap-3 mb-8 px-2">
+          <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-xl">🚁</div>
+          <div><div class="font-bold">無人機練習</div><div class="text-xs text-slate-500">台灣學科考試</div></div>
+        </div>
+        <nav class="space-y-1 flex-1">
+          <button @click="nav('home')" :class="view==='home'?'bg-blue-900/40 text-blue-300':'text-slate-400 hover:text-slate-200 hover:bg-slate-800'" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors">🏠 首頁</button>
+          <button @click="nav('setup',{type:'chapter_seq'})" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">📖 章節練習</button>
+          <button @click="nav('setup',{type:'random'})" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">🎲 隨機練習</button>
+          <button @click="nav('setup',{type:'timed'})" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">⏱️ 限時考試</button>
+          <button @click="wrong.length>0&&nav('setup',{type:'wrong'})" :disabled="wrong.length===0" :class="wrong.length===0?'opacity-40 cursor-not-allowed':'hover:text-slate-200 hover:bg-slate-800'" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 transition-colors">
+            🔁 錯題複習
+            <span v-if="wrong.length>0" class="ml-auto text-xs bg-red-900/50 text-red-400 px-1.5 py-0.5 rounded-full">{{wrong.length}}</span>
+          </button>
+        </nav>
+        <div class="space-y-1">
+          <button @click="nav('stats')" :class="view==='stats'?'bg-blue-900/40 text-blue-300':'text-slate-400 hover:text-slate-200 hover:bg-slate-800'" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors">📊 學習統計</button>
+          <button @click="nav('settings')" :class="view==='settings'?'bg-blue-900/40 text-blue-300':'text-slate-400 hover:text-slate-200 hover:bg-slate-800'" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors">⚙️ 設定</button>
+        </div>
+      </div>
+
+      <!-- Main content -->
+      <div class="flex-1 flex flex-col min-h-0 relative">
+        <transition name="fade" mode="out-in">
+          <HomeView  v-if="view==='home'"     key="home"     :prog="prog" :wrong="wrong" :nav="nav"/>
+          <SetupView v-else-if="view==='setup'"  :key="'setup_'+params?.type" :params="params" :wrong="wrong" :cfg="cfg" :nav="nav"/>
+          <QuizView  v-else-if="view==='quiz'"   :key="quizKey" :params="params" :wrong="wrong" :onRecord="record" :nav="nav"/>
+          <ResultView v-else-if="view==='result'" key="result"  :params="params" :onSave="addSession" :nav="nav"/>
+          <StatsView  v-else-if="view==='stats'"  key="stats"   :prog="prog" :wrong="wrong" :sessions="sessions" :nav="nav" :onClear="clearAll"/>
+          <SettingsView v-else-if="view==='settings'" key="settings" :cfg="cfg" :nav="nav" :onSave="persist"/>
+        </transition>
+      </div>
+
+      <!-- Mobile bottom nav -->
+      <div v-if="view!=='quiz'" class="lg:hidden flex-shrink-0 bg-slate-900 border-t border-slate-800 safe-bottom">
+        <div class="flex">
+          <button @click="nav('home')" class="flex-1 py-2.5 flex flex-col items-center gap-0.5" :class="view==='home'?'text-blue-400':'text-slate-500'"><span class="text-xl">🏠</span><span class="text-xs">首頁</span></button>
+          <button @click="nav('stats')" class="flex-1 py-2.5 flex flex-col items-center gap-0.5" :class="view==='stats'?'text-blue-400':'text-slate-500'"><span class="text-xl">📊</span><span class="text-xs">統計</span></button>
+          <button @click="nav('settings')" class="flex-1 py-2.5 flex flex-col items-center gap-0.5" :class="view==='settings'?'text-blue-400':'text-slate-500'"><span class="text-xl">⚙️</span><span class="text-xs">設定</span></button>
+        </div>
+      </div>
+    </div>`
+  };
+
+  const app = createApp(App);
+  ['HomeView','SetupView','QuizView','ResultView','StatsView','SettingsView'].forEach(n => app.component(n, eval(n)));
+  app.mount('#app');
+
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(()=>{}));
+  }
+  </script>
+</body>
+</html>
