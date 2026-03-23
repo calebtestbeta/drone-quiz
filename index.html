@@ -245,8 +245,8 @@
     props: ['params','wrong','cfg','nav'],
     setup(p) {
       const type = p.params.type;
-      const selCh = ref(type==='wrong'?[]:[1,2,3,4]);
-      const qCount = ref(type==='timed'?p.cfg.exam_count:20);
+      const selCh = ref(type==='wrong'?[]:( p.params.chapters?.length ? p.params.chapters : [1,2,3,4]));
+      const qCount = ref(p.params.count ?? (type==='timed'?p.cfg.exam_count:20));
       const info = { chapter_seq:{icon:'📖',title:'章節循序練習'}, random:{icon:'🎲',title:'隨機抽題練習'}, timed:{icon:'⏱️',title:'限時模擬考試'}, wrong:{icon:'🔁',title:'錯題複習'} };
       const avail = computed(()=> type==='wrong'?p.wrong.length : CHAPTERS.filter(c=>selCh.value.includes(c.num)).reduce((s,c)=>s+c.total,0));
       const maxQ = computed(()=>Math.min(avail.value, type==='timed'?100:200));
@@ -388,7 +388,7 @@
         timer.stop();
         const total = qs.value.length;
         const score = qs.value.filter(q => ans.value[q.gid] === q.answer).length;
-        p.nav('result', { type, questions: qs.value, answers: ans.value, total, score, timeUp,
+        p.nav('result', { type, chapters, count, questions: qs.value, answers: ans.value, total, score, timeUp,
           duration: Math.floor((Date.now()-startAt.value)/1000), showExp });
       }
 
@@ -552,7 +552,7 @@
       <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3 space-y-2">
         <button v-if="wrong.length>0" @click="nav('setup',{type:'wrong'})" class="w-full bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/50 text-amber-300 py-3 rounded-xl text-sm font-medium transition-colors">複習本次錯題（{{wrong.length}} 題）</button>
         <div class="flex gap-2">
-          <button @click="nav('setup',{type})" class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 py-3 rounded-xl text-sm font-medium text-slate-300">再練一次</button>
+          <button @click="nav('setup',{type,chapters:params.chapters,count:params.count})" class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 py-3 rounded-xl text-sm font-medium text-slate-300">再練一次</button>
           <button @click="nav('home')" class="flex-1 bg-blue-600 hover:bg-blue-500 py-3 rounded-xl text-sm font-semibold text-white">回首頁</button>
         </div>
       </div>
