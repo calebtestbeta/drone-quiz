@@ -59,6 +59,7 @@
   async function loadChapters(nums) {
     await Promise.all(nums.filter(n => !qCache[n]).map(async n => {
       const r = await fetch(`exam_ch${n}.json`);
+      if (!r.ok) throw new Error(`exam_ch${n}.json 載入失敗 (HTTP ${r.status})`);
       const d = await r.json();
       qCache[n] = d.map(q => ({ ...q, gid: `${q.chapter}_${q.id}` }));
     }));
@@ -365,13 +366,14 @@
           loading.value = false;
         }
       });
-      onUnmounted(() => timer.stop());
+      let autoAdvTimer = null;
+      onUnmounted(() => { timer.stop(); if (autoAdvTimer) clearTimeout(autoAdvTimer); });
 
       function pick(opt) {
         if (answered.value) return;
         ans.value[q.value.gid] = opt;
         p.onRecord(q.value.gid, opt, correct.value);
-        if (!showExp) setTimeout(advance, 250);
+        if (!showExp) autoAdvTimer = setTimeout(advance, 250);
         else if (opt !== correct.value) navigator.vibrate?.(50);
       }
 
@@ -776,7 +778,12 @@
   };
 
   const app = createApp(App);
-  ['HomeView','SetupView','QuizView','ResultView','StatsView','SettingsView'].forEach(n => app.component(n, eval(n)));
+  app.component('HomeView', HomeView);
+  app.component('SetupView', SetupView);
+  app.component('QuizView', QuizView);
+  app.component('ResultView', ResultView);
+  app.component('StatsView', StatsView);
+  app.component('SettingsView', SettingsView);
   app.mount('#app');
 
   if ('serviceWorker' in navigator) {

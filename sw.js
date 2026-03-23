@@ -59,7 +59,7 @@ self.addEventListener('fetch', e => {
           caches.open(CACHE).then(c => c.put(e.request, res.clone()));
         }
         return res;
-      }).catch(() => cached);
+      }).catch(() => cached || new Response('離線中，請稍後再試', { status: 503 }));
     })
   );
 });
