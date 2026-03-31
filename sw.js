@@ -1,4 +1,4 @@
-const CACHE = 'drone-quiz-v1';
+const CACHE = 'drone-quiz-v2';
 const CDN_CACHE = 'drone-quiz-cdn-v1';
 
 const PRECACHE = [
@@ -9,6 +9,10 @@ const PRECACHE = [
   '/exam_ch2.json',
   '/exam_ch3.json',
   '/exam_ch4.json',
+  '/normal_ch1.json',
+  '/normal_ch2.json',
+  '/normal_ch3.json',
+  '/normal_ch4.json',
 ];
 
 const CDN_ORIGINS = ['cdn.tailwindcss.com', 'unpkg.com'];

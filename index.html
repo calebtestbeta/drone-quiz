@@ -20,6 +20,9 @@
         'border-amber-700/50','bg-amber-900/20','text-amber-400','bg-amber-600/20','bg-amber-600/30','border-amber-600/50','text-amber-300',
         'text-slate-500','bg-slate-800/50','animate-pulse',
         'bg-purple-900/50','bg-red-900/50','bg-red-600','hover:bg-red-500','hover:bg-red-900/30',
+        'bg-emerald-600','hover:bg-emerald-500','bg-emerald-500','text-emerald-400','bg-emerald-900/50',
+        'bg-emerald-900/40','text-emerald-300','bg-emerald-900/20','border-emerald-700/50','border-emerald-800/50',
+        'bg-emerald-900/30','border-emerald-500','text-emerald-600',
       ]
     }
   </script>
@@ -40,30 +43,40 @@
 
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script>
-  const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
+  const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick, inject, provide } = Vue;
 
   // ── Storage helpers ──────────────────────────────────────────
   const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
   const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
 
   // ── Chapter metadata ─────────────────────────────────────────
-  const CHAPTERS = [
-    { num: 1, name: '民用航空法及相關法規', short: '法規', total: 146 },
-    { num: 2, name: '飛航安全及飛行原理',   short: '飛行原理', total: 234 },
-    { num: 3, name: '氣象學',               short: '氣象', total: 129 },
-    { num: 4, name: '人為因素及飛行決策',   short: '人為因素', total: 79 },
-  ];
+  const CHAPTERS_DEF = {
+    exam: [
+      { num: 1, name: '民用航空法及相關法規', short: '法規', total: 146 },
+      { num: 2, name: '飛航安全及飛行原理',   short: '飛行原理', total: 234 },
+      { num: 3, name: '氣象學',               short: '氣象', total: 129 },
+      { num: 4, name: '人為因素及飛行決策',   short: '人為因素', total: 79 },
+    ],
+    normal: [
+      { num: 1, name: '民用航空法及相關法規', short: '法規', total: 91 },
+      { num: 2, name: '基礎飛行原理',         short: '飛行原理', total: 172 },
+      { num: 3, name: '氣象',                 short: '氣象', total: 82 },
+      { num: 4, name: '緊急處置與飛行決策',   short: '飛行決策', total: 43 },
+    ],
+  };
 
   // ── Questions cache & loader ──────────────────────────────────
   const qCache = {};
-  async function loadChapters(nums) {
-    await Promise.all(nums.filter(n => !qCache[n]).map(async n => {
-      const r = await fetch(`exam_ch${n}.json`);
-      if (!r.ok) throw new Error(`exam_ch${n}.json 載入失敗 (HTTP ${r.status})`);
+  async function loadChapters(nums, mode = 'exam') {
+    const prefix = mode === 'normal' ? 'n' : 'e';
+    const filePrefix = mode === 'normal' ? 'normal' : 'exam';
+    await Promise.all(nums.filter(n => !qCache[`${prefix}_${n}`]).map(async n => {
+      const r = await fetch(`${filePrefix}_ch${n}.json`);
+      if (!r.ok) throw new Error(`${filePrefix}_ch${n}.json 載入失敗 (HTTP ${r.status})`);
       const d = await r.json();
-      qCache[n] = d.map(q => ({ ...q, gid: `${q.chapter}_${q.id}` }));
+      qCache[`${prefix}_${n}`] = d.map(q => ({ ...q, gid: `${prefix}_${q.chapter}_${q.id}` }));
     }));
-    return nums.flatMap(n => qCache[n] || []);
+    return nums.flatMap(n => qCache[`${prefix}_${n}`] || []);
   }
   function shuffle(a) {
     const b = [...a];
@@ -79,34 +92,45 @@
   }
 
   // ── useProgress ───────────────────────────────────────────────
-  function useProgress() {
-    const prog = ref(load('dq_progress', {}));
-    const wrong = ref(load('dq_wrong', []));
+  function useProgress(mode) {
+    const progKey = () => mode.value === 'normal' ? 'dq_progress_n' : 'dq_progress';
+    const wrongKey = () => mode.value === 'normal' ? 'dq_wrong_n' : 'dq_wrong';
+    const prefix = () => mode.value === 'normal' ? 'n' : 'e';
+    const prog = ref(load(progKey(), {}));
+    const wrong = ref(load(wrongKey(), []));
+    watch(mode, m => {
+      prog.value = load(m === 'normal' ? 'dq_progress_n' : 'dq_progress', {});
+      wrong.value = load(m === 'normal' ? 'dq_wrong_n' : 'dq_wrong', []);
+    });
     function record(gid, sel, ans) {
       const e = prog.value[gid] || { attempts: 0, correct: 0 };
       const ok = sel === ans;
       prog.value[gid] = { attempts: e.attempts + 1, correct: e.correct + (ok ? 1 : 0), last: sel, ok, at: Date.now() };
-      save('dq_progress', prog.value);
-      if (!ok && !wrong.value.includes(gid)) { wrong.value.push(gid); save('dq_wrong', wrong.value); }
+      save(progKey(), prog.value);
+      if (!ok && !wrong.value.includes(gid)) { wrong.value.push(gid); save(wrongKey(), wrong.value); }
     }
     function chStat(n) {
-      const es = Object.entries(prog.value).filter(([k]) => k.startsWith(n + '_'));
+      const pfx = prefix();
+      const chapters = CHAPTERS_DEF[mode.value];
+      const es = Object.entries(prog.value).filter(([k]) => k.startsWith(`${pfx}_${n}_`));
       const t = es.length, c = es.filter(([, v]) => v.ok).length;
-      return { t, c, pct: t > 0 ? Math.round(c / t * 100) : 0, cov: Math.round(t / (CHAPTERS[n-1]?.total || 1) * 100) };
+      return { t, c, pct: t > 0 ? Math.round(c / t * 100) : 0, cov: Math.round(t / (chapters[n-1]?.total || 1) * 100) };
     }
-    function clearAll() { prog.value = {}; wrong.value = []; save('dq_progress', {}); save('dq_wrong', []); }
+    function clearAll() { prog.value = {}; wrong.value = []; save(progKey(), {}); save(wrongKey(), []); }
     return { prog, wrong, record, chStat, clearAll };
   }
 
   // ── useSessions ───────────────────────────────────────────────
-  function useSessions() {
-    const sessions = ref(load('dq_sessions', []));
+  function useSessions(mode) {
+    const sessKey = () => mode.value === 'normal' ? 'dq_sessions_n' : 'dq_sessions';
+    const sessions = ref(load(sessKey(), []));
+    watch(mode, m => { sessions.value = load(m === 'normal' ? 'dq_sessions_n' : 'dq_sessions', []); });
     function addSession(s) {
       sessions.value.unshift(s);
       if (sessions.value.length > 50) sessions.value.length = 50;
-      save('dq_sessions', sessions.value);
+      save(sessKey(), sessions.value);
     }
-    function clearAll() { sessions.value = []; save('dq_sessions', []); }
+    function clearAll() { sessions.value = []; save(sessKey(), []); }
     return { sessions, addSession, clearAll };
   }
 
@@ -116,6 +140,19 @@
     const cfg = ref(load('dq_settings', defaults));
     function persist() { save('dq_settings', cfg.value); }
     return { cfg, persist };
+  }
+
+  // ── migrateProgressIfNeeded ──────────────────────────────────
+  function migrateProgressIfNeeded() {
+    if (load('dq_migrated_v2', false)) return;
+    const prog = load('dq_progress', {});
+    const wrong = load('dq_wrong', []);
+    const newProg = {};
+    Object.entries(prog).forEach(([k, v]) => { newProg[`e_${k}`] = v; });
+    const newWrong = wrong.map(gid => `e_${gid}`);
+    save('dq_progress', newProg);
+    save('dq_wrong', newWrong);
+    save('dq_migrated_v2', true);
   }
 
   // ── useTimer ──────────────────────────────────────────────────
@@ -138,33 +175,60 @@
   const HomeView = {
     props: ['prog','wrong','nav'],
     setup(p) {
+      const mode = inject('mode');
+      const setMode = inject('setMode');
+      const chapters = inject('chapters');
+      const toastMsg = ref('');
+      let toastTimer = null;
+
+      function switchMode(m) {
+        if (mode.value === m) return;
+        setMode(m);
+        const label = m === 'normal' ? '普通操作證' : '專業操作證';
+        toastMsg.value = `已切換至${label}，進度各自獨立保存`;
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { toastMsg.value = ''; }, 2500);
+      }
+
+      const isNormal = computed(() => mode.value === 'normal');
       const overall = computed(() => {
         const vals = Object.values(p.prog);
-        const t = vals.length, c = vals.filter(v=>v.ok).length;
-        return { t, c, pct: t ? Math.round(c/t*100) : 0 };
+        const t = vals.length, c = vals.filter(v => v.ok).length;
+        return { t, c, pct: t ? Math.round(c / t * 100) : 0 };
       });
-      const chs = computed(() => CHAPTERS.map(ch => {
-        const es = Object.entries(p.prog).filter(([k])=>k.startsWith(ch.num+'_'));
-        const t = es.length, c = es.filter(([,v])=>v.ok).length;
-        return { ...ch, ans: t, cor: c, pct: t ? Math.round(c/t*100) : 0, cov: Math.round(t/ch.total*100) };
+      const chs = computed(() => chapters.value.map(ch => {
+        const pfx = mode.value === 'normal' ? 'n' : 'e';
+        const es = Object.entries(p.prog).filter(([k]) => k.startsWith(`${pfx}_${ch.num}_`));
+        const t = es.length, c = es.filter(([, v]) => v.ok).length;
+        return { ...ch, ans: t, cor: c, pct: t ? Math.round(c / t * 100) : 0, cov: Math.round(t / ch.total * 100) };
       }));
-      return { overall, chs, wc: computed(()=>p.wrong.length) };
+      return { overall, chs, wc: computed(() => p.wrong.length), mode, isNormal, switchMode, toastMsg };
     },
     template: `
     <div class="flex flex-col h-full">
       <div class="flex-shrink-0 bg-slate-900 border-b border-slate-800 px-4 py-4">
-        <div class="flex items-center gap-3">
-          <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-xl">🚁</div>
+        <div class="flex items-center gap-3 mb-3">
+          <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" :class="isNormal?'bg-emerald-600':'bg-blue-600'">🚁</div>
           <div>
             <h1 class="text-lg font-bold">無人機考試練習</h1>
             <p class="text-xs text-slate-400">台灣遙控無人機操作證學科</p>
           </div>
         </div>
+        <div class="flex bg-slate-800 rounded-xl p-1 gap-1">
+          <button @click="switchMode('normal')" :class="isNormal?'bg-emerald-600 text-white shadow-sm':'text-slate-400 hover:text-slate-200'"
+            class="flex-1 py-1.5 px-3 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5">
+            <span>普通操作證</span><span class="text-xs opacity-70 font-normal">388題</span>
+          </button>
+          <button @click="switchMode('exam')" :class="!isNormal?'bg-blue-600 text-white shadow-sm':'text-slate-400 hover:text-slate-200'"
+            class="flex-1 py-1.5 px-3 rounded-lg text-sm font-semibold transition-all duration-200 flex items-center justify-center gap-1.5">
+            <span>專業操作證</span><span class="text-xs opacity-70 font-normal">588題</span>
+          </button>
+        </div>
       </div>
       <div class="flex-1 overflow-y-auto">
         <div class="px-4 py-4 grid grid-cols-3 gap-3">
           <div class="bg-slate-900 rounded-xl p-3 text-center">
-            <div class="text-2xl font-bold text-blue-400">{{overall.t}}</div>
+            <div class="text-2xl font-bold" :class="isNormal?'text-emerald-400':'text-blue-400'">{{overall.t}}</div>
             <div class="text-xs text-slate-400 mt-0.5">已作答</div>
           </div>
           <div class="bg-slate-900 rounded-xl p-3 text-center">
@@ -181,7 +245,7 @@
           <div class="space-y-2.5">
             <button @click="nav('setup',{type:'chapter_seq'})" class="w-full bg-slate-900 hover:bg-slate-800 active:scale-[0.98] border border-slate-800 rounded-xl p-4 text-left transition-all">
               <div class="flex items-center gap-3">
-                <div class="w-10 h-10 bg-blue-900/50 rounded-lg flex items-center justify-center text-xl">📖</div>
+                <div class="w-10 h-10 rounded-lg flex items-center justify-center text-xl" :class="isNormal?'bg-emerald-900/50':'bg-blue-900/50'">📖</div>
                 <div class="flex-1 min-w-0">
                   <div class="font-semibold">章節循序練習</div>
                   <div class="text-sm text-slate-400">依章節順序作答，答錯顯示說明</div>
@@ -236,12 +300,19 @@
                 </div>
               </div>
               <div class="h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                <div class="h-full rounded-full transition-all duration-500" :class="ch.pct>=70?'bg-green-500':ch.ans>0?'bg-amber-500':'bg-blue-500'" :style="{width:Math.max(ch.cov,ch.ans>0?2:0)+'%'}"></div>
+                <div class="h-full rounded-full transition-all duration-500"
+                  :class="ch.pct>=70?'bg-green-500':ch.ans>0?'bg-amber-500':(isNormal?'bg-emerald-500':'bg-blue-500')"
+                  :style="{width:Math.max(ch.cov,ch.ans>0?2:0)+'%'}"></div>
               </div>
             </div>
           </div>
         </div>
       </div>
+      <transition name="fade">
+        <div v-if="toastMsg" class="fixed bottom-24 left-1/2 -translate-x-1/2 z-50 pointer-events-none">
+          <div class="bg-slate-700 text-slate-100 text-sm px-4 py-2.5 rounded-xl shadow-lg whitespace-nowrap">{{toastMsg}}</div>
+        </div>
+      </transition>
     </div>`
   };
 
@@ -251,11 +322,14 @@
   const SetupView = {
     props: ['params','wrong','cfg','nav'],
     setup(p) {
+      const mode = inject('mode');
+      const chapters = inject('chapters');
+      const isNormal = computed(() => mode.value === 'normal');
       const type = p.params.type;
       const selCh = ref(type==='wrong'?[]:( p.params.chapters?.length ? p.params.chapters : [1,2,3,4]));
       const qCount = ref(p.params.count ?? (type==='timed'?p.cfg.exam_count:20));
       const info = { chapter_seq:{icon:'📖',title:'章節循序練習'}, random:{icon:'🎲',title:'隨機抽題練習'}, timed:{icon:'⏱️',title:'限時模擬考試'}, wrong:{icon:'🔁',title:'錯題複習'} };
-      const avail = computed(()=> type==='wrong'?p.wrong.length : CHAPTERS.filter(c=>selCh.value.includes(c.num)).reduce((s,c)=>s+c.total,0));
+      const avail = computed(()=> type==='wrong'?p.wrong.length : chapters.value.filter(c=>selCh.value.includes(c.num)).reduce((s,c)=>s+c.total,0));
       const maxQ = computed(()=>Math.min(avail.value, type==='timed'?100:200));
       const canStart = computed(()=> type==='wrong'?p.wrong.length>0:selCh.value.length>0);
 
@@ -266,9 +340,9 @@
       }
       function start() {
         const count = type==='chapter_seq'?null : type==='wrong'?p.wrong.length : Math.min(qCount.value, avail.value);
-        p.nav('quiz',{ type, chapters: type==='wrong'?[]:selCh.value, count, timeSec: type==='timed'?p.cfg.exam_min*60:0, showExp: type!=='timed' });
+        p.nav('quiz',{ type, chapters: type==='wrong'?[]:selCh.value, count, timeSec: type==='timed'?p.cfg.exam_min*60:0, showExp: type!=='timed', mode: mode.value });
       }
-      return { type, selCh, qCount, info, avail, maxQ, canStart, toggleCh, start, CHAPTERS };
+      return { type, selCh, qCount, info, avail, maxQ, canStart, toggleCh, start, chapters, isNormal };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -277,17 +351,18 @@
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
         </button>
         <h1 class="font-semibold">{{info[type]?.icon}} {{info[type]?.title}}</h1>
+        <span class="ml-auto text-xs px-2 py-0.5 rounded-full font-medium" :class="isNormal?'bg-emerald-900/50 text-emerald-400':'bg-blue-900/50 text-blue-400'">{{isNormal?'普通操作證':'專業操作證'}}</span>
       </div>
       <div class="flex-1 overflow-y-auto px-4 py-4 space-y-5">
         <template v-if="type!=='wrong'">
           <div>
             <div class="flex justify-between items-center mb-3">
               <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">選擇章節</p>
-              <button @click="selCh.length===4?selCh.splice(0,3):selCh.splice(0,selCh.length,1,2,3,4)" class="text-xs text-blue-400">{{selCh.length===4?'取消全選':'全選'}}</button>
+              <button @click="selCh.length===4?selCh.splice(0,3):selCh.splice(0,selCh.length,1,2,3,4)" class="text-xs" :class="isNormal?'text-emerald-400':'text-blue-400'">{{selCh.length===4?'取消全選':'全選'}}</button>
             </div>
             <div class="grid grid-cols-2 gap-2">
-              <button v-for="ch in CHAPTERS" :key="ch.num" @click="toggleCh(ch.num)"
-                :class="selCh.includes(ch.num)?'border-blue-500 bg-blue-900/30 text-blue-300':'border-slate-700 bg-slate-900 text-slate-300'"
+              <button v-for="ch in chapters" :key="ch.num" @click="toggleCh(ch.num)"
+                :class="selCh.includes(ch.num)?(isNormal?'border-emerald-500 bg-emerald-900/30 text-emerald-300':'border-blue-500 bg-blue-900/30 text-blue-300'):'border-slate-700 bg-slate-900 text-slate-300'"
                 class="border rounded-xl p-3 text-left transition-colors">
                 <div class="text-xs font-mono text-slate-500 mb-1">CH{{ch.num}}</div>
                 <div class="text-sm font-medium leading-tight">{{ch.short}}</div>
@@ -304,7 +379,7 @@
                 <span class="text-2xl font-bold text-slate-100">{{Math.min(qCount,maxQ)}} 題</span>
                 <span class="text-sm text-slate-400">最多 {{maxQ}}</span>
               </div>
-              <input type="range" v-model.number="qCount" :min="10" :max="maxQ" step="1" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+              <input type="range" v-model.number="qCount" :min="10" :max="maxQ" step="1" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer" :class="isNormal?'accent-emerald-500':'accent-blue-500'">
               <div class="flex justify-between text-xs text-slate-500 mt-1"><span>10</span><span>{{maxQ}}</span></div>
             </div>
           </div>
@@ -324,7 +399,7 @@
         </div>
       </div>
       <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3">
-        <button @click="start" :disabled="!canStart" :class="canStart?'bg-blue-600 hover:bg-blue-500':'bg-slate-700 opacity-50 cursor-not-allowed'" class="w-full py-4 rounded-xl font-semibold text-white text-base transition-colors">開始練習</button>
+        <button @click="start" :disabled="!canStart" :class="canStart?(isNormal?'bg-emerald-600 hover:bg-emerald-500':'bg-blue-600 hover:bg-blue-500'):'bg-slate-700 opacity-50 cursor-not-allowed'" class="w-full py-4 rounded-xl font-semibold text-white text-base transition-colors">開始練習</button>
       </div>
     </div>`
   };
@@ -352,21 +427,22 @@
       const isOk = computed(() => answered.value && sel.value === correct.value);
       const progress = computed(() => ({ cur: idx.value+1, tot: qs.value.length, donePct: Math.round(Object.keys(ans.value).length/Math.max(qs.value.length,1)*100) }));
 
+      const qMode = p.params.mode || 'exam';
       onMounted(async () => {
         try {
           let list;
           if (type === 'wrong') {
-            const all = await loadChapters([1,2,3,4]);
+            const all = await loadChapters([1,2,3,4], qMode);
             const wset = new Set(p.wrong);
             list = all.filter(q => wset.has(q.gid));
           } else if (type === 'search') {
-            const all = await loadChapters([1,2,3,4]);
+            const all = await loadChapters([1,2,3,4], qMode);
             const byGid = new Map(all.map(item => [item.gid, item]));
             list = (gids || []).map(gid => byGid.get(gid)).filter(Boolean);
           } else if (type === 'chapter_seq') {
-            list = await loadChapters(chapters);
+            list = await loadChapters(chapters, qMode);
           } else {
-            const pool = await loadChapters(chapters);
+            const pool = await loadChapters(chapters, qMode);
             list = shuffle(pool).slice(0, count);
           }
           qs.value = list;
@@ -499,6 +575,7 @@
       const { type, questions, answers, total, score, timeUp, duration, showExp, source } = p.params;
       const chapters = p.params.chapters;
       const count = p.params.count;
+      const qMode = p.params.mode || 'exam';
       onMounted(() => p.onSave({ id:'s'+Date.now(), type, source, total, score, duration, timeUp, at: Date.now() }));
       const pct = computed(() => total>0?Math.round(score/total*100):0);
       const passed = computed(() => pct.value>=70);
@@ -517,7 +594,7 @@
       const retryGids = computed(() => questions.map(q => q.gid));
       function retry() {
         if (type === 'search') {
-          p.nav('quiz', { type, chapters, count: retryGids.value.length, gids: retryGids.value, timeSec: 0, showExp, source: source || 'search_batch' });
+          p.nav('quiz', { type, chapters, count: retryGids.value.length, gids: retryGids.value, timeSec: 0, showExp, source: source || 'search_batch', mode: qMode });
           return;
         }
         p.nav('setup', { type, chapters, count });
@@ -586,22 +663,28 @@
   const StatsView = {
     props: ['prog','wrong','sessions','nav','onClear'],
     setup(p) {
+      const mode = inject('mode');
+      const chapters = inject('chapters');
+      const isNormal = computed(() => mode.value === 'normal');
       const confirm = ref(false);
       const overall = computed(() => {
         const vs = Object.values(p.prog);
         const t = vs.length, c = vs.filter(v=>v.ok).length;
         return { t, c, pct: t?Math.round(c/t*100):0 };
       });
-      const chs = computed(() => CHAPTERS.map(ch => {
-        const es = Object.entries(p.prog).filter(([k])=>k.startsWith(ch.num+'_'));
-        const t = es.length, c = es.filter(([,v])=>v.ok).length;
-        return { ...ch, t, c, pct: t?Math.round(c/t*100):0, cov: Math.round(t/ch.total*100) };
-      }));
+      const chs = computed(() => {
+        const pfx = mode.value === 'normal' ? 'n' : 'e';
+        return chapters.value.map(ch => {
+          const es = Object.entries(p.prog).filter(([k])=>k.startsWith(`${pfx}_${ch.num}_`));
+          const t = es.length, c = es.filter(([,v])=>v.ok).length;
+          return { ...ch, t, c, pct: t?Math.round(c/t*100):0, cov: Math.round(t/ch.total*100) };
+        });
+      });
       const recent = computed(() => p.sessions.slice(0,20));
       const typeLabel = t => ({ chapter_seq:'章節循序', random:'隨機練習', timed:'限時考試', wrong:'錯題複習', search:'搜尋練習' }[t]||t);
       const fmtDate = ts => new Date(ts).toLocaleDateString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
       function doClear() { p.onClear(); confirm.value=false; }
-      return { confirm, overall, chs, recent, typeLabel, fmtDate, doClear };
+      return { confirm, overall, chs, recent, typeLabel, fmtDate, doClear, isNormal };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -610,10 +693,11 @@
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
         </button>
         <h1 class="font-semibold">學習統計</h1>
+        <span class="ml-auto text-xs px-2 py-0.5 rounded-full font-medium" :class="isNormal?'bg-emerald-900/50 text-emerald-400':'bg-blue-900/50 text-blue-400'">{{isNormal?'普通操作證':'專業操作證'}}</span>
       </div>
       <div class="flex-1 overflow-y-auto">
         <div class="px-4 py-4 grid grid-cols-3 gap-3">
-          <div class="bg-slate-900 rounded-xl p-3 text-center"><div class="text-2xl font-bold text-blue-400">{{overall.t}}</div><div class="text-xs text-slate-400 mt-0.5">已作答</div></div>
+          <div class="bg-slate-900 rounded-xl p-3 text-center"><div class="text-2xl font-bold" :class="isNormal?'text-emerald-400':'text-blue-400'">{{overall.t}}</div><div class="text-xs text-slate-400 mt-0.5">已作答</div></div>
           <div class="bg-slate-900 rounded-xl p-3 text-center"><div class="text-2xl font-bold text-green-400">{{overall.pct}}%</div><div class="text-xs text-slate-400 mt-0.5">正確率</div></div>
           <div class="bg-slate-900 rounded-xl p-3 text-center"><div class="text-2xl font-bold text-amber-400">{{wrong.length}}</div><div class="text-xs text-slate-400 mt-0.5">錯題數</div></div>
         </div>
@@ -659,13 +743,13 @@
         </div>
       </div>
       <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3">
-        <button @click="confirm=true" class="w-full bg-red-900/20 hover:bg-red-900/30 border border-red-800/50 text-red-400 py-3 rounded-xl text-sm font-medium">清除所有學習記錄</button>
+        <button @click="confirm=true" class="w-full bg-red-900/20 hover:bg-red-900/30 border border-red-800/50 text-red-400 py-3 rounded-xl text-sm font-medium">清除{{isNormal?'普通操作證':'專業操作證'}}學習記錄</button>
       </div>
       <transition name="fade">
         <div v-if="confirm" class="fixed inset-0 bg-black/70 flex items-end justify-center z-50" @click.self="confirm=false">
           <div class="bg-slate-900 border border-slate-700 rounded-t-2xl w-full max-w-lg p-6 pb-safe">
             <h3 class="text-lg font-semibold mb-2">確定清除？</h3>
-            <p class="text-sm text-slate-400 mb-5">所有記錄、錯題集和考試紀錄將被清除，無法復原。</p>
+            <p class="text-sm text-slate-400 mb-5">{{isNormal?'普通操作證':'專業操作證'}}的所有記錄、錯題集和考試紀錄將被清除，無法復原。另一張操作證的資料不受影響。</p>
             <div class="flex gap-3">
               <button @click="confirm=false" class="flex-1 bg-slate-800 border border-slate-700 py-3 rounded-xl text-slate-300 font-medium">取消</button>
               <button @click="doClear" class="flex-1 bg-red-600 hover:bg-red-500 py-3 rounded-xl text-white font-medium">確定清除</button>
@@ -722,7 +806,7 @@
         <div>
           <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">關於</p>
           <div class="bg-slate-900 border border-slate-800 rounded-xl p-4">
-            <p class="text-sm text-slate-400 leading-relaxed">台灣遙控無人機操作證學科考試練習平台，共 588 道題目，涵蓋民用航空法及相關法規、飛航安全及飛行原理、氣象學、人為因素及飛行決策四個章節。</p>
+            <p class="text-sm text-slate-400 leading-relaxed">台灣遙控無人機操作證學科考試練習平台，支援普通操作證（388 題）及專業操作證（588 題），兩套題庫進度各自獨立保存。</p>
             <p class="text-xs text-slate-600 mt-3">資料來源：民航局遙控無人機學科考試題庫</p>
           </div>
         </div>
@@ -739,6 +823,8 @@
   const SearchView = {
     props: ['cfg','nav'],
     setup(p) {
+      const mode = inject('mode');
+      const chapters = inject('chapters');
       const SEARCH_STATE_KEY = 'dq_search_state';
       const loading = ref(true);
       const errMsg = ref('');
@@ -763,9 +849,11 @@
       }
       function onScroll(e) { saveState(e.target.scrollTop); }
 
-      onMounted(async () => {
+      async function buildIndex(m) {
+        loading.value = true;
+        errMsg.value = '';
         try {
-          const all = await loadChapters([1,2,3,4]);
+          const all = await loadChapters([1,2,3,4], m);
           idxQs.value = all.map(item => {
             const searchText = normalizeText([
               item.chapter_name,
@@ -785,14 +873,19 @@
             };
           });
           loading.value = false;
-          await nextTick();
-          if (scrollBox.value) scrollBox.value.scrollTop = initialScrollTop;
         } catch (e) {
           errMsg.value = '載入失敗，請確認在 HTTP 伺服器環境下開啟';
           loading.value = false;
         }
+      }
+
+      onMounted(async () => {
+        await buildIndex(mode.value);
+        await nextTick();
+        if (scrollBox.value) scrollBox.value.scrollTop = initialScrollTop;
       });
       onUnmounted(() => saveState());
+      watch(mode, async m => { query.value = ''; selCh.value = [1,2,3,4]; await buildIndex(m); });
       watch([query, selCh], () => saveState(), { deep: true });
 
       const pool = computed(() => idxQs.value.filter(item => selCh.value.includes(item.chapter)));
@@ -827,7 +920,8 @@
           count: resultGids.value.length,
           timeSec: 0,
           showExp: p.cfg.show_exp,
-          source: 'search_batch'
+          source: 'search_batch',
+          mode: mode.value
         });
       }
       function quickPractice(q) {
@@ -839,11 +933,12 @@
           count: 1,
           timeSec: 0,
           showExp: p.cfg.show_exp,
-          source: 'search_quick'
+          source: 'search_quick',
+          mode: mode.value
         });
       }
 
-      return { loading, errMsg, query, selCh, pool, result, hotKeywords, toggleCh, startPractice, quickPractice, onScroll, scrollBox, CHAPTERS };
+      return { loading, errMsg, query, selCh, pool, result, hotKeywords, toggleCh, startPractice, quickPractice, onScroll, scrollBox, chapters };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -864,7 +959,7 @@
           <div>
             <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">選擇章節</p>
             <div class="grid grid-cols-2 gap-2">
-              <button v-for="ch in CHAPTERS" :key="ch.num" @click="toggleCh(ch.num)"
+              <button v-for="ch in chapters" :key="ch.num" @click="toggleCh(ch.num)"
                 :class="selCh.includes(ch.num)?'border-blue-500 bg-blue-900/30 text-blue-300':'border-slate-700 bg-slate-900 text-slate-300'"
                 class="border rounded-xl p-3 text-left transition-colors">
                 <div class="text-xs font-mono text-slate-500 mb-1">CH{{ch.num}}</div>
@@ -927,8 +1022,20 @@
   // ════════════════════════════════════════════════════════════════
   const App = {
     setup() {
-      const { prog, wrong, record, clearAll: clearProg } = useProgress();
-      const { sessions, addSession, clearAll: clearSess } = useSessions();
+      migrateProgressIfNeeded();
+
+      const mode = ref(load('dq_mode', 'exam'));
+      function setMode(m) {
+        if (mode.value === m) return;
+        mode.value = m;
+        save('dq_mode', m);
+      }
+      provide('mode', mode);
+      provide('setMode', setMode);
+      provide('chapters', computed(() => CHAPTERS_DEF[mode.value]));
+
+      const { prog, wrong, record, clearAll: clearProg } = useProgress(mode);
+      const { sessions, addSession, clearAll: clearSess } = useSessions(mode);
       const { cfg, persist } = useSettings();
 
       const view = ref('home');
@@ -944,8 +1051,8 @@
     <div class="h-full flex lg:flex-row flex-col">
       <!-- Desktop sidebar -->
       <div class="hidden lg:flex flex-col w-60 flex-shrink-0 bg-slate-900 border-r border-slate-800 p-4">
-        <div class="flex items-center gap-3 mb-8 px-2">
-          <div class="w-10 h-10 bg-blue-600 rounded-xl flex items-center justify-center text-xl">🚁</div>
+        <div class="flex items-center gap-3 mb-4 px-2">
+          <div class="w-10 h-10 rounded-xl flex items-center justify-center text-xl" :class="params?.mode==='normal'||view==='home'?'bg-blue-600':'bg-blue-600'">🚁</div>
           <div><div class="font-bold">無人機練習</div><div class="text-xs text-slate-500">台灣學科考試</div></div>
         </div>
         <nav class="space-y-1 flex-1">
