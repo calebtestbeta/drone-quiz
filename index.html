@@ -40,7 +40,7 @@
 
   <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
   <script>
-  const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted } = Vue;
+  const { createApp, ref, reactive, computed, watch, onMounted, onUnmounted, nextTick } = Vue;
 
   // ── Storage helpers ──────────────────────────────────────────
   const load = (k, d) => { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } };
@@ -69,6 +69,13 @@
     const b = [...a];
     for (let i = b.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [b[i], b[j]] = [b[j], b[i]]; }
     return b;
+  }
+  function normalizeText(s) { return String(s || '').toLowerCase().trim(); }
+  function tokenize(text) {
+    const src = normalizeText(text);
+    const cjk = src.match(/[\u4e00-\u9fff]{2,}/g) || [];
+    const latin = src.match(/[a-z]{2,}/g) || [];
+    return [...cjk, ...latin];
   }
 
   // ── useProgress ───────────────────────────────────────────────
@@ -328,7 +335,7 @@
   const QuizView = {
     props: ['params','wrong','onRecord','nav'],
     setup(p) {
-      const { type, chapters, count, timeSec, showExp } = p.params;
+      const { type, chapters, count, timeSec, showExp, gids } = p.params;
       const loading = ref(true);
       const errMsg = ref('');
       const qs = ref([]);
@@ -352,6 +359,10 @@
             const all = await loadChapters([1,2,3,4]);
             const wset = new Set(p.wrong);
             list = all.filter(q => wset.has(q.gid));
+          } else if (type === 'search') {
+            const all = await loadChapters([1,2,3,4]);
+            const byGid = new Map(all.map(item => [item.gid, item]));
+            list = (gids || []).map(gid => byGid.get(gid)).filter(Boolean);
           } else if (type === 'chapter_seq') {
             list = await loadChapters(chapters);
           } else {
@@ -485,10 +496,10 @@
   const ResultView = {
     props: ['params','onSave','nav'],
     setup(p) {
-      const { type, questions, answers, total, score, timeUp, duration, showExp } = p.params;
+      const { type, questions, answers, total, score, timeUp, duration, showExp, source } = p.params;
       const chapters = p.params.chapters;
       const count = p.params.count;
-      onMounted(() => p.onSave({ id:'s'+Date.now(), type, total, score, duration, timeUp, at: Date.now() }));
+      onMounted(() => p.onSave({ id:'s'+Date.now(), type, source, total, score, duration, timeUp, at: Date.now() }));
       const pct = computed(() => total>0?Math.round(score/total*100):0);
       const passed = computed(() => pct.value>=70);
       const dur = computed(() => { const m=Math.floor(duration/60),s=duration%60; return m>0?`${m} 分 ${s} 秒`:`${s} 秒`; });
@@ -503,7 +514,15 @@
       });
       const wrong = computed(() => questions.filter(q=>answers[q.gid]&&answers[q.gid]!==q.answer));
       const noAns = computed(() => questions.filter(q=>!answers[q.gid]).length);
-      return { pct, passed, dur, byChapter, wrong, noAns, type, showExp, chapters, count };
+      const retryGids = computed(() => questions.map(q => q.gid));
+      function retry() {
+        if (type === 'search') {
+          p.nav('quiz', { type, chapters, count: retryGids.value.length, gids: retryGids.value, timeSec: 0, showExp, source: source || 'search_batch' });
+          return;
+        }
+        p.nav('setup', { type, chapters, count });
+      }
+      return { pct, passed, dur, byChapter, wrong, noAns, type, showExp, chapters, count, retry };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -554,7 +573,7 @@
       <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3 space-y-2">
         <button v-if="wrong.length>0" @click="nav('setup',{type:'wrong'})" class="w-full bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/50 text-amber-300 py-3 rounded-xl text-sm font-medium transition-colors">複習本次錯題（{{wrong.length}} 題）</button>
         <div class="flex gap-2">
-          <button @click="nav('setup',{type,chapters,count})" class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 py-3 rounded-xl text-sm font-medium text-slate-300">再練一次</button>
+          <button @click="retry" class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 py-3 rounded-xl text-sm font-medium text-slate-300">再練一次</button>
           <button @click="nav('home')" class="flex-1 bg-blue-600 hover:bg-blue-500 py-3 rounded-xl text-sm font-semibold text-white">回首頁</button>
         </div>
       </div>
@@ -579,7 +598,7 @@
         return { ...ch, t, c, pct: t?Math.round(c/t*100):0, cov: Math.round(t/ch.total*100) };
       }));
       const recent = computed(() => p.sessions.slice(0,20));
-      const typeLabel = t => ({ chapter_seq:'章節循序', random:'隨機練習', timed:'限時考試', wrong:'錯題複習' }[t]||t);
+      const typeLabel = t => ({ chapter_seq:'章節循序', random:'隨機練習', timed:'限時考試', wrong:'錯題複習', search:'搜尋練習' }[t]||t);
       const fmtDate = ts => new Date(ts).toLocaleDateString('zh-TW',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
       function doClear() { p.onClear(); confirm.value=false; }
       return { confirm, overall, chs, recent, typeLabel, fmtDate, doClear };
@@ -715,6 +734,195 @@
   };
 
   // ════════════════════════════════════════════════════════════════
+  // VIEW: SearchView
+  // ════════════════════════════════════════════════════════════════
+  const SearchView = {
+    props: ['cfg','nav'],
+    setup(p) {
+      const SEARCH_STATE_KEY = 'dq_search_state';
+      const loading = ref(true);
+      const errMsg = ref('');
+      const savedState = load(SEARCH_STATE_KEY, {});
+      const query = ref(savedState.query || '');
+      const initialCh = Array.isArray(savedState.chapters) ? savedState.chapters.filter(n => [1,2,3,4].includes(n)) : [];
+      const selCh = ref(initialCh.length ? initialCh : [1,2,3,4]);
+      const idxQs = ref([]);
+      const scrollBox = ref(null);
+      const initialScrollTop = Number(savedState.scrollTop) || 0;
+      const STOP_WORDS = new Set([
+        '以及','可以','不得','應該','是否','進行','使用','飛行','無人機','遙控','操作','之','的','與','及','在','或','和','為','於',
+        'this','that','with','from','into','must','shall','should','would','could','have','has','had','were','was','when','where'
+      ]);
+
+      function saveState(scrollTop = null) {
+        save(SEARCH_STATE_KEY, {
+          query: query.value,
+          chapters: [...selCh.value],
+          scrollTop: scrollTop == null ? (scrollBox.value?.scrollTop || 0) : scrollTop
+        });
+      }
+      function onScroll(e) { saveState(e.target.scrollTop); }
+
+      onMounted(async () => {
+        try {
+          const all = await loadChapters([1,2,3,4]);
+          idxQs.value = all.map(item => {
+            const searchText = normalizeText([
+              item.chapter_name,
+              item.question,
+              item.options?.A,
+              item.options?.B,
+              item.options?.C,
+              item.options?.D,
+              item.explanation
+            ].filter(Boolean).join(' '));
+            const tokens = tokenize(searchText).filter(w => !STOP_WORDS.has(w) && !/^\d+$/.test(w));
+            return {
+              ...item,
+              searchText,
+              compactText: searchText.replace(/\s+/g, ''),
+              tokens: [...new Set(tokens)]
+            };
+          });
+          loading.value = false;
+          await nextTick();
+          if (scrollBox.value) scrollBox.value.scrollTop = initialScrollTop;
+        } catch (e) {
+          errMsg.value = '載入失敗，請確認在 HTTP 伺服器環境下開啟';
+          loading.value = false;
+        }
+      });
+      onUnmounted(() => saveState());
+      watch([query, selCh], () => saveState(), { deep: true });
+
+      const pool = computed(() => idxQs.value.filter(item => selCh.value.includes(item.chapter)));
+      const normQ = computed(() => normalizeText(query.value));
+      const result = computed(() => {
+        if (!normQ.value) return [];
+        const compactQ = normQ.value.replace(/\s+/g, '');
+        return pool.value.filter(item => item.searchText.includes(normQ.value) || (compactQ && item.compactText.includes(compactQ)));
+      });
+      const hotKeywords = computed(() => {
+        const counter = new Map();
+        pool.value.forEach(item => item.tokens.forEach(t => counter.set(t, (counter.get(t) || 0) + 1)));
+        return [...counter.entries()]
+          .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-Hant'))
+          .slice(0, 24)
+          .map(([word, freq]) => ({ word, freq }));
+      });
+      const resultGids = computed(() => result.value.map(q => q.gid));
+
+      function toggleCh(n) {
+        const i = selCh.value.indexOf(n);
+        if (i >= 0) { if (selCh.value.length > 1) selCh.value.splice(i, 1); }
+        else { selCh.value.push(n); selCh.value.sort((a, b) => a - b); }
+      }
+      function startPractice() {
+        if (resultGids.value.length === 0) return;
+        saveState();
+        p.nav('quiz', {
+          type: 'search',
+          chapters: [...selCh.value],
+          gids: resultGids.value,
+          count: resultGids.value.length,
+          timeSec: 0,
+          showExp: p.cfg.show_exp,
+          source: 'search_batch'
+        });
+      }
+      function quickPractice(q) {
+        saveState();
+        p.nav('quiz', {
+          type: 'search',
+          chapters: [...selCh.value],
+          gids: [q.gid],
+          count: 1,
+          timeSec: 0,
+          showExp: p.cfg.show_exp,
+          source: 'search_quick'
+        });
+      }
+
+      return { loading, errMsg, query, selCh, pool, result, hotKeywords, toggleCh, startPractice, quickPractice, onScroll, scrollBox, CHAPTERS };
+    },
+    template: `
+    <div class="flex flex-col h-full">
+      <div class="flex-shrink-0 bg-slate-900 border-b border-slate-800 px-4 py-3 flex items-center gap-3">
+        <button @click="nav('home')" class="p-1 text-slate-400 hover:text-slate-100">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
+        </button>
+        <h1 class="font-semibold">題目搜尋</h1>
+      </div>
+      <div ref="scrollBox" @scroll.passive="onScroll" class="flex-1 overflow-y-auto">
+        <div v-if="loading" class="h-full flex items-center justify-center">
+          <div class="text-center"><div class="text-4xl mb-3">🔎</div><p class="text-slate-400">建立搜尋索引中…</p></div>
+        </div>
+        <div v-else-if="errMsg" class="h-full flex items-center justify-center px-6 text-center">
+          <div><div class="text-4xl mb-3">⚠️</div><p class="text-slate-300 font-medium mb-2">{{errMsg}}</p><button @click="nav('home')" class="bg-blue-600 px-6 py-2 rounded-lg text-white mt-2">返回首頁</button></div>
+        </div>
+        <div v-else class="px-4 py-4 space-y-4">
+          <div>
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">選擇章節</p>
+            <div class="grid grid-cols-2 gap-2">
+              <button v-for="ch in CHAPTERS" :key="ch.num" @click="toggleCh(ch.num)"
+                :class="selCh.includes(ch.num)?'border-blue-500 bg-blue-900/30 text-blue-300':'border-slate-700 bg-slate-900 text-slate-300'"
+                class="border rounded-xl p-3 text-left transition-colors">
+                <div class="text-xs font-mono text-slate-500 mb-1">CH{{ch.num}}</div>
+                <div class="text-sm font-medium leading-tight">{{ch.short}}</div>
+                <div class="text-xs text-slate-500 mt-1">{{ch.total}} 題</div>
+              </button>
+            </div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+            <div class="flex items-center gap-2">
+              <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-4.35-4.35M16 10a6 6 0 11-12 0 6 6 0 0112 0z"/></svg>
+              <input v-model.trim="query" type="text" placeholder="搜尋題幹、選項或解題說明" class="flex-1 bg-transparent outline-none text-sm placeholder:text-slate-500">
+              <button v-if="query" @click="query=''" class="text-xs text-slate-400 hover:text-slate-200">清除</button>
+            </div>
+            <p class="text-xs text-slate-500 mt-2">目前範圍：{{pool.length}} 題</p>
+          </div>
+
+          <div>
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">法規關鍵字索引</p>
+            <div class="flex flex-wrap gap-2">
+              <button v-for="k in hotKeywords" :key="k.word" @click="query=k.word" class="text-xs px-2.5 py-1.5 rounded-full border transition-colors"
+                :class="query===k.word?'border-blue-500 bg-blue-900/30 text-blue-300':'border-slate-700 bg-slate-900 text-slate-300 hover:bg-slate-800'">
+                {{k.word}} <span class="text-slate-500">({{k.freq}})</span>
+              </button>
+            </div>
+          </div>
+
+          <div>
+            <div class="flex items-center justify-between mb-3">
+              <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">搜尋結果</p>
+              <div class="flex items-center gap-3">
+                <span class="text-xs text-slate-500">點題目可快速作答 1 題</span>
+                <span class="text-sm text-slate-400">{{result.length}} 題</span>
+              </div>
+            </div>
+            <div v-if="!query" class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-sm text-slate-400">輸入關鍵字或點選上方索引開始搜尋。</div>
+            <div v-else-if="result.length===0" class="bg-slate-900 border border-slate-800 rounded-xl p-4 text-sm text-slate-400">找不到符合「{{query}}」的題目，請換個關鍵字。</div>
+            <div v-else class="space-y-2.5">
+              <button v-for="q in result" :key="q.gid" @click="quickPractice(q)" @keydown.enter.prevent="quickPractice(q)" @keydown.space.prevent="quickPractice(q)" class="w-full text-left bg-slate-900 border border-slate-800 rounded-xl p-3 transition-colors hover:bg-slate-800/70 hover:border-slate-700 focus:outline-none focus:ring-2 focus:ring-blue-500/50">
+                <div class="flex items-center gap-2 mb-2">
+                  <span class="text-xs bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded font-mono">CH{{q.chapter}}</span>
+                  <span class="text-xs text-slate-500">題號 {{q.id}}</span>
+                  <span class="ml-auto text-xs text-blue-400">快速作答</span>
+                </div>
+                <p class="text-sm text-slate-300 leading-relaxed">{{q.question}}</p>
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3">
+        <button @click="startPractice" :disabled="result.length===0" :class="result.length>0?'bg-blue-600 hover:bg-blue-500':'bg-slate-700 opacity-50 cursor-not-allowed'" class="w-full py-3.5 rounded-xl font-semibold text-white text-sm transition-colors">開始搜尋練習（{{result.length}} 題）</button>
+      </div>
+    </div>`
+  };
+
+  // ════════════════════════════════════════════════════════════════
   // APP ROOT
   // ════════════════════════════════════════════════════════════════
   const App = {
@@ -745,6 +953,7 @@
           <button @click="nav('setup',{type:'chapter_seq'})" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">📖 章節練習</button>
           <button @click="nav('setup',{type:'random'})" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">🎲 隨機練習</button>
           <button @click="nav('setup',{type:'timed'})" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 hover:text-slate-200 hover:bg-slate-800 transition-colors">⏱️ 限時考試</button>
+          <button @click="nav('search')" :class="view==='search'?'bg-blue-900/40 text-blue-300':'text-slate-400 hover:text-slate-200 hover:bg-slate-800'" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors">🔎 題目搜尋</button>
           <button @click="wrong.length>0&&nav('setup',{type:'wrong'})" :disabled="wrong.length===0" :class="wrong.length===0?'opacity-40 cursor-not-allowed':'hover:text-slate-200 hover:bg-slate-800'" class="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium text-slate-400 transition-colors">
             🔁 錯題複習
             <span v-if="wrong.length>0" class="ml-auto text-xs bg-red-900/50 text-red-400 px-1.5 py-0.5 rounded-full">{{wrong.length}}</span>
@@ -763,6 +972,7 @@
           <SetupView v-else-if="view==='setup'"  :key="'setup_'+params?.type" :params="params" :wrong="wrong" :cfg="cfg" :nav="nav"/>
           <QuizView  v-else-if="view==='quiz'"   :key="quizKey" :params="params" :wrong="wrong" :onRecord="record" :nav="nav"/>
           <ResultView v-else-if="view==='result'" key="result"  :params="params" :onSave="addSession" :nav="nav"/>
+          <SearchView v-else-if="view==='search'" key="search"  :cfg="cfg" :nav="nav"/>
           <StatsView  v-else-if="view==='stats'"  key="stats"   :prog="prog" :wrong="wrong" :sessions="sessions" :nav="nav" :onClear="clearAll"/>
           <SettingsView v-else-if="view==='settings'" key="settings" :cfg="cfg" :nav="nav" :onSave="persist"/>
         </transition>
@@ -772,6 +982,7 @@
       <div v-if="view!=='quiz'" class="lg:hidden flex-shrink-0 bg-slate-900 border-t border-slate-800 safe-bottom">
         <div class="flex">
           <button @click="nav('home')" class="flex-1 py-2.5 flex flex-col items-center gap-0.5" :class="view==='home'?'text-blue-400':'text-slate-500'"><span class="text-xl">🏠</span><span class="text-xs">首頁</span></button>
+          <button @click="nav('search')" class="flex-1 py-2.5 flex flex-col items-center gap-0.5" :class="view==='search'?'text-blue-400':'text-slate-500'"><span class="text-xl">🔎</span><span class="text-xs">搜尋</span></button>
           <button @click="nav('stats')" class="flex-1 py-2.5 flex flex-col items-center gap-0.5" :class="view==='stats'?'text-blue-400':'text-slate-500'"><span class="text-xl">📊</span><span class="text-xs">統計</span></button>
           <button @click="nav('settings')" class="flex-1 py-2.5 flex flex-col items-center gap-0.5" :class="view==='settings'?'text-blue-400':'text-slate-500'"><span class="text-xl">⚙️</span><span class="text-xs">設定</span></button>
         </div>
@@ -784,6 +995,7 @@
   app.component('SetupView', SetupView);
   app.component('QuizView', QuizView);
   app.component('ResultView', ResultView);
+  app.component('SearchView', SearchView);
   app.component('StatsView', StatsView);
   app.component('SettingsView', SettingsView);
   app.mount('#app');
