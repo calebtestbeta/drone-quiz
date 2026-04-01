@@ -1,10 +1,13 @@
-const CACHE = 'drone-quiz-v2';
+const CACHE = 'drone-quiz-v3';
 const CDN_CACHE = 'drone-quiz-cdn-v1';
 
 const PRECACHE = [
   '/',
   '/index.html',
   '/manifest.json',
+  '/game.html',
+  '/game-scene.js',
+  '/game-mission.js',
   '/exam_ch1.json',
   '/exam_ch2.json',
   '/exam_ch3.json',
