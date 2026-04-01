@@ -716,25 +716,38 @@ function updatePhysics(dt) {
   S.vRoll  = THREE.MathUtils.lerp(S.vRoll,  -inp.rx * tp, dt * 9);
 }
 
+function lerpAngle(a, b, t) {
+  let d = b - a;
+  while (d >  Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return a + d * t;
+}
+
 function updateRTH(dt) {
   const rthAlt = Math.max(S.homePos.y + 12, S.pos.y);
   const toHome = new THREE.Vector3(S.homePos.x - S.pos.x, 0, S.homePos.z - S.pos.z);
   const dist = toHome.length();
 
   if (S.pos.y < rthAlt - 0.5) {
+    // Phase 1: 爬升
     S.vel.y = THREE.MathUtils.lerp(S.vel.y, 3.5, dt * 2.5);
-    S.vel.x *= 0.92; S.vel.z *= 0.92;
-  } else if (dist > 1.0) {
-    const spd = Math.min(dist * 1.8, 5);
-    toHome.normalize().multiplyScalar(spd);
-    S.vel.x = THREE.MathUtils.lerp(S.vel.x, toHome.x, dt * 2.5);
-    S.vel.z = THREE.MathUtils.lerp(S.vel.z, toHome.z, dt * 2.5);
-    S.vel.y = THREE.MathUtils.lerp(S.vel.y, 0, dt * 3);
-    S.yaw = THREE.MathUtils.lerp(S.yaw, Math.atan2(-toHome.x, -toHome.z), dt * 1.5);
+    S.vel.x *= Math.exp(-4 * dt);
+    S.vel.z *= Math.exp(-4 * dt);
   } else {
-    S.vel.x = THREE.MathUtils.lerp(S.vel.x, 0, dt * 5);
-    S.vel.z = THREE.MathUtils.lerp(S.vel.z, 0, dt * 5);
-    S.vel.y = -1.8;
+    // Phase 2+3: 連續速度曲線飛回家，不使用硬性門檻切換
+    if (dist > 0.3) {
+      const spd = Math.min(dist * 1.8, 5);
+      const dir = toHome.clone().normalize();
+      S.vel.x = THREE.MathUtils.lerp(S.vel.x, dir.x * spd, dt * 2.5);
+      S.vel.z = THREE.MathUtils.lerp(S.vel.z, dir.z * spd, dt * 2.5);
+      S.yaw = lerpAngle(S.yaw, Math.atan2(-toHome.x, -toHome.z), dt * 1.5);
+    } else {
+      S.vel.x = THREE.MathUtils.lerp(S.vel.x, 0, dt * 5);
+      S.vel.z = THREE.MathUtils.lerp(S.vel.z, 0, dt * 5);
+    }
+    // 垂直：距離 < 2m 才開始降落，用 lerp 避免速度硬切
+    const descentTarget = dist < 2.0 ? -1.8 : 0;
+    S.vel.y = THREE.MathUtils.lerp(S.vel.y, descentTarget, dt * 3);
   }
 
   S.pos.addScaledVector(S.vel, dt);
