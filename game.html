@@ -196,6 +196,15 @@
       #ahi-wrap, #cmp-wrap { width: 72px; height: 72px; }
       #alt-disp { height: 72px; }
       #vsi { height: 72px; }
+      #hint { top: 36%; }
+      #hint h2 { font-size: 15px; }
+      #hint p  { font-size: 10px; line-height: 1.4; }
+    }
+    @media (pointer: coarse) and (max-height: 500px) {
+      .jz { width: 110px; height: 110px; }
+      .jt { width: 44px; height: 44px; }
+      #act { bottom: calc(max(6px, env(safe-area-inset-bottom, 6px)) + 118px); }
+      #vt  { bottom: calc(max(6px, env(safe-area-inset-bottom, 6px)) + 118px); }
     }
 
     /* RTH progress ring */
