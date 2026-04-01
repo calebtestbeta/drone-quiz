@@ -152,6 +152,7 @@
       background: rgba(255,255,255,0.07);
       border: 1.5px solid rgba(255,255,255,0.18);
       position: relative;
+      touch-action: none;
     }
     .jt {
       position: absolute;
@@ -542,29 +543,13 @@ function applyKeyInput(dt) {
 // ── Virtual joysticks ──────────────────────────────────────────
 function makeJoy(ringEl, thumbEl, cb) {
   const R = 46;
-  let pid = null, cx = 0, cy = 0;
+  let tid = null, cx = 0, cy = 0;
 
-  ringEl.addEventListener('pointerdown', e => {
-    e.preventDefault();
-    ringEl.setPointerCapture(e.pointerId);
-    pid = e.pointerId;
+  function getCenter() {
     const r = ringEl.getBoundingClientRect();
     cx = r.left + r.width / 2;
     cy = r.top  + r.height / 2;
-    move(e.clientX, e.clientY);
-  });
-  ringEl.addEventListener('pointermove', e => {
-    if (e.pointerId !== pid) return;
-    move(e.clientX, e.clientY);
-  });
-  ['pointerup', 'pointercancel'].forEach(ev => {
-    ringEl.addEventListener(ev, e => {
-      if (e.pointerId !== pid) return;
-      pid = null;
-      thumbEl.style.transform = 'translate(-50%,-50%)';
-      cb(0, 0);
-    });
-  });
+  }
 
   function move(px, py) {
     let dx = px - cx, dy = py - cy;
@@ -572,6 +557,59 @@ function makeJoy(ringEl, thumbEl, cb) {
     if (d > R) { dx = dx / d * R; dy = dy / d * R; }
     thumbEl.style.transform = `translate(calc(-50% + ${dx}px), calc(-50% + ${dy}px))`;
     cb(dx / R, -dy / R);
+  }
+
+  function reset() {
+    tid = null;
+    thumbEl.style.transform = 'translate(-50%,-50%)';
+    cb(0, 0);
+  }
+
+  if ('ontouchstart' in window) {
+    // ── Touch Events（iOS / Android）──
+    ringEl.addEventListener('touchstart', e => {
+      e.preventDefault();
+      if (tid !== null) return;
+      const t = e.changedTouches[0];
+      tid = t.identifier;
+      getCenter();
+      move(t.clientX, t.clientY);
+    }, { passive: false });
+
+    ringEl.addEventListener('touchmove', e => {
+      e.preventDefault();
+      const t = [...e.changedTouches].find(x => x.identifier === tid);
+      if (!t) return;
+      move(t.clientX, t.clientY);
+    }, { passive: false });
+
+    ringEl.addEventListener('touchend', e => {
+      const t = [...e.changedTouches].find(x => x.identifier === tid);
+      if (!t) return;
+      reset();
+    }, { passive: false });
+
+    ringEl.addEventListener('touchcancel', e => {
+      const t = [...e.changedTouches].find(x => x.identifier === tid);
+      if (!t) return;
+      reset();
+    }, { passive: false });
+
+  } else {
+    // ── Mouse Events（桌面瀏覽器）──
+    function onMouseMove(e) { move(e.clientX, e.clientY); }
+    function onMouseUp()    { document.removeEventListener('mousemove', onMouseMove);
+                              document.removeEventListener('mouseup',   onMouseUp);
+                              reset(); }
+
+    ringEl.addEventListener('mousedown', e => {
+      e.preventDefault();
+      tid = 1;
+      getCenter();
+      move(e.clientX, e.clientY);
+      document.addEventListener('mousemove', onMouseMove);
+      document.addEventListener('mouseup',   onMouseUp);
+    });
   }
 }
 
