@@ -142,6 +142,29 @@
     return { cfg, persist };
   }
 
+  // ── useSeqPos ─────────────────────────────────────────────────
+  function useSeqPos(modeOrRef) {
+    function key() {
+      const m = modeOrRef?.value ?? modeOrRef;
+      return m === 'normal' ? 'dq_seq_pos_n' : 'dq_seq_pos';
+    }
+    function ck(chs) { return Array.isArray(chs) ? chs.join(',') : String(chs); }
+    function getPos(chs) { return load(key())?.[ck(chs)] ?? null; }
+    function setPos(chs, idx, total) {
+      const d = load(key()) || {};
+      d[ck(chs)] = { idx, total, at: Date.now() };
+      save(key(), d);
+    }
+    function clearPos(chs) {
+      const d = load(key()) || {};
+      delete d[ck(chs)];
+      save(key(), d);
+    }
+    function allPos() { return load(key()) || {}; }
+    function clearAllPos() { save(key(), {}); }
+    return { getPos, setPos, clearPos, allPos, clearAllPos };
+  }
+
   // ── migrateProgressIfNeeded ──────────────────────────────────
   function migrateProgressIfNeeded() {
     if (load('dq_migrated_v2', false)) return;
@@ -196,11 +219,14 @@
         const t = vals.length, c = vals.filter(v => v.ok).length;
         return { t, c, pct: t ? Math.round(c / t * 100) : 0 };
       });
+      const seqPos = useSeqPos(mode);
+      const seqPosData = computed(() => seqPos.allPos());
       const chs = computed(() => chapters.value.map(ch => {
         const pfx = mode.value === 'normal' ? 'n' : 'e';
         const es = Object.entries(p.prog).filter(([k]) => k.startsWith(`${pfx}_${ch.num}_`));
         const t = es.length, c = es.filter(([, v]) => v.ok).length;
-        return { ...ch, ans: t, cor: c, pct: t ? Math.round(c / t * 100) : 0, cov: Math.round(t / ch.total * 100) };
+        const resume = seqPosData.value[String(ch.num)] || null;
+        return { ...ch, ans: t, cor: c, pct: t ? Math.round(c / t * 100) : 0, cov: Math.round(t / ch.total * 100), resume };
       }));
       return { overall, chs, wc: computed(() => p.wrong.length), mode, isNormal, switchMode, toastMsg };
     },
@@ -304,6 +330,15 @@
                   :class="ch.pct>=70?'bg-green-500':ch.ans>0?'bg-amber-500':(isNormal?'bg-emerald-500':'bg-blue-500')"
                   :style="{width:Math.max(ch.cov,ch.ans>0?2:0)+'%'}"></div>
               </div>
+              <div v-if="ch.resume" class="mt-2.5 flex items-center justify-between">
+                <span class="text-xs text-slate-500">上次做到 {{ch.resume.idx}}/{{ch.resume.total}} 題</span>
+                <button
+                  @click="nav('quiz',{type:'chapter_seq',chapters:[ch.num],resumeFrom:ch.resume.idx,count:null,timeSec:0,showExp:true,mode:mode.value})"
+                  :class="isNormal?'bg-emerald-700 hover:bg-emerald-600':'bg-blue-700 hover:bg-blue-600'"
+                  class="text-xs text-white px-3 py-1 rounded-lg font-medium transition-colors">
+                  繼續
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -343,17 +378,19 @@
       const avail = computed(()=> type==='wrong'?p.wrong.length : chapters.value.filter(c=>selCh.value.includes(c.num)).reduce((s,c)=>s+c.total,0));
       const maxQ = computed(()=>Math.min(avail.value, type==='timed'?100:200));
       const canStart = computed(()=> type==='wrong'?p.wrong.length>0:selCh.value.length>0);
+      const seqPos = useSeqPos(mode);
+      const savedPos = computed(() => type === 'chapter_seq' ? seqPos.getPos(selCh.value) : null);
 
       function toggleCh(n) {
         const i = selCh.value.indexOf(n);
         if (i>=0) { if(selCh.value.length>1) selCh.value.splice(i,1); }
         else { selCh.value.push(n); selCh.value.sort((a,b)=>a-b); }
       }
-      function start() {
+      function start(resumeFrom = 0) {
         const count = type==='chapter_seq'?null : type==='wrong'?p.wrong.length : Math.min(qCount.value, avail.value);
-        p.nav('quiz',{ type, chapters: type==='wrong'?[]:selCh.value, count, timeSec: type==='timed'?p.cfg.exam_min*60:0, showExp: type!=='timed', mode: mode.value });
+        p.nav('quiz',{ type, chapters: type==='wrong'?[]:selCh.value, count, timeSec: type==='timed'?p.cfg.exam_min*60:0, showExp: type!=='timed', mode: mode.value, resumeFrom });
       }
-      return { type, selCh, qCount, info, avail, maxQ, canStart, toggleCh, start, chapters, isNormal };
+      return { type, selCh, qCount, info, avail, maxQ, canStart, toggleCh, start, chapters, isNormal, savedPos };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -401,6 +438,18 @@
             <p class="text-sm text-slate-400 mt-1">將練習所有曾答錯的題目</p>
           </div>
         </template>
+        <div v-if="type==='chapter_seq' && savedPos" class="bg-blue-900/20 border border-blue-700/50 rounded-xl p-4">
+          <div class="flex items-center justify-between gap-3">
+            <div>
+              <div class="text-sm font-semibold text-blue-300">找到上次練習進度</div>
+              <div class="text-xs text-slate-400 mt-1">已完成 {{savedPos.idx}} / {{savedPos.total}} 題</div>
+            </div>
+            <div class="flex gap-2 flex-shrink-0">
+              <button @click="start(0)" class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors">重頭開始</button>
+              <button @click="start(savedPos.idx)" :class="isNormal?'bg-emerald-600 hover:bg-emerald-500':'bg-blue-600 hover:bg-blue-500'" class="text-xs text-white px-3 py-1.5 rounded-lg font-medium transition-colors">繼續上次</button>
+            </div>
+          </div>
+        </div>
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2.5">
           <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">練習摘要</p>
           <div v-if="type!=='wrong'" class="flex justify-between text-sm"><span class="text-slate-400">章節</span><span>第 {{selCh.join('、')}} 章</span></div>
@@ -422,6 +471,7 @@
     props: ['params','wrong','onRecord','nav'],
     setup(p) {
       const { type, chapters, count, timeSec, showExp, gids } = p.params;
+      const resumeFrom = p.params.resumeFrom ?? 0;
       const loading = ref(true);
       const errMsg = ref('');
       const qs = ref([]);
@@ -436,9 +486,14 @@
       const correct = computed(() => q.value?.answer);
       const answered = computed(() => !!sel.value);
       const isOk = computed(() => answered.value && sel.value === correct.value);
-      const progress = computed(() => ({ cur: idx.value+1, tot: qs.value.length, donePct: Math.round(Object.keys(ans.value).length/Math.max(qs.value.length,1)*100) }));
+      const progress = computed(() => ({
+        cur: idx.value + 1 + resumeFrom,
+        tot: qs.value.length + resumeFrom,
+        donePct: Math.round(Object.keys(ans.value).length / Math.max(qs.value.length, 1) * 100)
+      }));
 
       const qMode = p.params.mode || 'exam';
+      const seqPos = useSeqPos(qMode);
       onMounted(async () => {
         try {
           let list;
@@ -451,7 +506,8 @@
             const byGid = new Map(all.map(item => [item.gid, item]));
             list = (gids || []).map(gid => byGid.get(gid)).filter(Boolean);
           } else if (type === 'chapter_seq') {
-            list = await loadChapters(chapters, qMode);
+            const full = await loadChapters(chapters, qMode);
+            list = resumeFrom > 0 ? full.slice(resumeFrom) : full;
           } else {
             const pool = await loadChapters(chapters, qMode);
             list = shuffle(pool).slice(0, count);
@@ -471,6 +527,9 @@
         if (answered.value) return;
         ans.value[q.value.gid] = opt;
         p.onRecord(q.value.gid, opt, correct.value);
+        if (type === 'chapter_seq') {
+          seqPos.setPos(chapters, resumeFrom + idx.value + 1, resumeFrom + qs.value.length);
+        }
         if (!showExp) autoAdvTimer = setTimeout(advance, 250);
         else if (opt !== correct.value) navigator.vibrate?.(50);
       }
@@ -484,6 +543,7 @@
 
       function finish(timeUp) {
         timer.stop();
+        if (type === 'chapter_seq') seqPos.clearPos(chapters);
         const total = qs.value.length;
         const score = qs.value.filter(q => ans.value[q.gid] === q.answer).length;
         p.nav('result', { type, chapters, count, questions: qs.value, answers: ans.value, total, score, timeUp,
@@ -566,7 +626,7 @@
         <div v-if="showExit" class="fixed inset-0 bg-black/70 flex items-end justify-center z-50" @click.self="showExit=false">
           <div class="bg-slate-900 border border-slate-700 rounded-t-2xl w-full max-w-lg p-6 pb-safe">
             <h3 class="text-lg font-semibold mb-2">確定離開？</h3>
-            <p class="text-sm text-slate-400 mb-5">目前答題進度不會保存</p>
+            <p class="text-sm text-slate-400 mb-5">{{ type === 'chapter_seq' ? '進度已自動保存，下次可繼續' : '目前答題進度不會保存' }}</p>
             <div class="flex gap-3">
               <button @click="showExit=false" class="flex-1 bg-slate-800 border border-slate-700 py-3 rounded-xl text-slate-300 font-medium hover:bg-slate-700">繼續答題</button>
               <button @click="nav('home')" class="flex-1 bg-red-600 hover:bg-red-500 py-3 rounded-xl text-white font-medium">離開</button>
@@ -836,10 +896,10 @@
     setup(p) {
       const mode = inject('mode');
       const chapters = inject('chapters');
-      const SEARCH_STATE_KEY = 'dq_search_state';
+      const searchStateKey = () => mode.value === 'normal' ? 'dq_search_state_n' : 'dq_search_state';
       const loading = ref(true);
       const errMsg = ref('');
-      const savedState = load(SEARCH_STATE_KEY, {});
+      const savedState = load(searchStateKey(), {});
       const query = ref(savedState.query || '');
       const initialCh = Array.isArray(savedState.chapters) ? savedState.chapters.filter(n => [1,2,3,4].includes(n)) : [];
       const selCh = ref(initialCh.length ? initialCh : [1,2,3,4]);
@@ -852,7 +912,7 @@
       ]);
 
       function saveState(scrollTop = null) {
-        save(SEARCH_STATE_KEY, {
+        save(searchStateKey(), {
           query: query.value,
           chapters: [...selCh.value],
           scrollTop: scrollTop == null ? (scrollBox.value?.scrollTop || 0) : scrollTop
@@ -1048,13 +1108,14 @@
       const { prog, wrong, record, clearAll: clearProg } = useProgress(mode);
       const { sessions, addSession, clearAll: clearSess } = useSessions(mode);
       const { cfg, persist } = useSettings();
+      const { clearAllPos } = useSeqPos(mode);
 
       const view = ref('home');
       const params = ref(null);
       const quizKey = ref(0);
 
       function nav(v, p=null) { params.value=p; view.value=v; if(v==='quiz') quizKey.value++; window.scrollTo(0,0); }
-      function clearAll() { clearProg(); clearSess(); }
+      function clearAll() { clearProg(); clearSess(); clearAllPos(); }
 
       return { view, params, quizKey, nav, prog, wrong, sessions, cfg, record, addSession, persist, clearAll };
     },
