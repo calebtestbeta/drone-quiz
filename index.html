@@ -165,6 +165,61 @@
     return { getPos, setPos, clearPos, allPos, clearAllPos };
   }
 
+  // ── usePullToRefresh ─────────────────────────────────────────
+  function usePullToRefresh(allowRef) {
+    const THRESHOLD = 72;
+    const pullDist = ref(0);
+    const ptrReady = ref(false);
+    let startY = 0;
+    let active = false;
+
+    function scrollTopOf(el) {
+      let node = el;
+      while (node && node !== document.documentElement) {
+        if (node.scrollTop > 0) return node.scrollTop;
+        node = node.parentElement;
+      }
+      return 0;
+    }
+
+    function onStart(e) {
+      if (!allowRef.value) return;
+      if (scrollTopOf(e.target) > 0) return;
+      startY = e.touches[0].clientY;
+      active = true;
+    }
+    function onMove(e) {
+      if (!active) return;
+      const dy = e.touches[0].clientY - startY;
+      if (dy <= 0 || scrollTopOf(e.target) > 0) { active = false; pullDist.value = 0; ptrReady.value = false; return; }
+      pullDist.value = Math.min(dy * 0.45, THRESHOLD + 24);
+      ptrReady.value = pullDist.value >= THRESHOLD;
+    }
+    function onEnd() {
+      if (!active) return;
+      active = false;
+      if (ptrReady.value) {
+        setTimeout(() => window.location.reload(), 300);
+      } else {
+        pullDist.value = 0;
+        ptrReady.value = false;
+      }
+    }
+
+    onMounted(() => {
+      document.addEventListener('touchstart', onStart, { passive: true });
+      document.addEventListener('touchmove',  onMove,  { passive: true });
+      document.addEventListener('touchend',   onEnd,   { passive: true });
+    });
+    onUnmounted(() => {
+      document.removeEventListener('touchstart', onStart);
+      document.removeEventListener('touchmove',  onMove);
+      document.removeEventListener('touchend',   onEnd);
+    });
+
+    return { pullDist, ptrReady, THRESHOLD };
+  }
+
   // ── migrateProgressIfNeeded ──────────────────────────────────
   function migrateProgressIfNeeded() {
     if (load('dq_migrated_v2', false)) return;
@@ -1188,7 +1243,9 @@
       function nav(v, p=null) { params.value=p; view.value=v; if(v==='quiz') quizKey.value++; window.scrollTo(0,0); }
       function clearAll() { clearProg(); clearSess(); clearAllPos(); }
 
-      return { view, params, quizKey, nav, prog, wrong, sessions, cfg, record, addSession, persist, clearAll };
+      const { pullDist, ptrReady } = usePullToRefresh(computed(() => view.value !== 'quiz'));
+
+      return { view, params, quizKey, nav, prog, wrong, sessions, cfg, record, addSession, persist, clearAll, pullDist, ptrReady };
     },
     template: `
     <div class="h-full flex lg:flex-row flex-col">
@@ -1217,6 +1274,15 @@
 
       <!-- Main content -->
       <div class="flex-1 flex flex-col min-h-0 relative">
+        <!-- Pull-to-refresh indicator -->
+        <div v-if="pullDist > 2" class="absolute inset-x-0 top-0 z-50 flex items-end justify-center pointer-events-none overflow-hidden" :style="{ height: pullDist + 'px' }">
+          <div class="mb-1.5 flex items-center gap-1.5 text-xs font-medium transition-colors" :class="ptrReady ? 'text-blue-400' : 'text-slate-500'">
+            <svg class="w-4 h-4 flex-shrink-0 transition-transform duration-200" :class="ptrReady ? 'animate-spin' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
+            </svg>
+            <span>{{ ptrReady ? '放開以重新整理' : '下拉以重新整理' }}</span>
+          </div>
+        </div>
         <transition name="fade" mode="out-in">
           <HomeView  v-if="view==='home'"     key="home"     :prog="prog" :wrong="wrong" :nav="nav"/>
           <SetupView v-else-if="view==='setup'"  :key="'setup_'+params?.type" :params="params" :wrong="wrong" :cfg="cfg" :nav="nav"/>
