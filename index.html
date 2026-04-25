@@ -459,7 +459,7 @@
         </div>
       </div>
       <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3">
-        <button @click="start" :disabled="!canStart" :class="canStart?(isNormal?'bg-emerald-600 hover:bg-emerald-500':'bg-blue-600 hover:bg-blue-500'):'bg-slate-700 opacity-50 cursor-not-allowed'" class="w-full py-4 rounded-xl font-semibold text-white text-base transition-colors">開始練習</button>
+        <button @click="start()" :disabled="!canStart" :class="canStart?(isNormal?'bg-emerald-600 hover:bg-emerald-500':'bg-blue-600 hover:bg-blue-500'):'bg-slate-700 opacity-50 cursor-not-allowed'" class="w-full py-4 rounded-xl font-semibold text-white text-base transition-colors">開始練習</button>
       </div>
     </div>`
   };
@@ -486,11 +486,14 @@
       const correct = computed(() => q.value?.answer);
       const answered = computed(() => !!sel.value);
       const isOk = computed(() => answered.value && sel.value === correct.value);
-      const progress = computed(() => ({
-        cur: idx.value + 1 + resumeFrom,
-        tot: qs.value.length + resumeFrom,
-        donePct: Math.round(Object.keys(ans.value).length / Math.max(qs.value.length, 1) * 100)
-      }));
+      const progress = computed(() => {
+        const tot = qs.value.length + resumeFrom;
+        return {
+          cur: idx.value + 1 + resumeFrom,
+          tot,
+          donePct: Math.round((resumeFrom + Object.keys(ans.value).length) / Math.max(tot, 1) * 100)
+        };
+      });
 
       const qMode = p.params.mode || 'exam';
       const seqPos = useSeqPos(qMode);
@@ -976,6 +979,16 @@
       });
       const resultGids = computed(() => result.value.map(q => q.gid));
 
+      const jumpId = ref('');
+      const jumpQuestion = computed(() => {
+        const raw = jumpId.value.trim();
+        if (!raw) return null;
+        const m = raw.match(/^(\d+)[-_](\d+)$/);
+        if (!m) return null;
+        const ch = parseInt(m[1]), id = parseInt(m[2]);
+        return idxQs.value.find(q => q.chapter === ch && q.id === id) ?? null;
+      });
+
       function toggleCh(n) {
         const i = selCh.value.indexOf(n);
         if (i >= 0) { if (selCh.value.length > 1) selCh.value.splice(i, 1); }
@@ -1009,7 +1022,7 @@
         });
       }
 
-      return { loading, errMsg, query, selCh, pool, result, hotKeywords, toggleCh, startPractice, quickPractice, onScroll, scrollBox, chapters };
+      return { loading, errMsg, query, selCh, pool, result, hotKeywords, toggleCh, startPractice, quickPractice, onScroll, scrollBox, chapters, jumpId, jumpQuestion };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -1038,6 +1051,24 @@
                 <div class="text-xs text-slate-500 mt-1">{{ch.total}} 題</div>
               </button>
             </div>
+          </div>
+
+          <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-2">按題號跳題</p>
+            <div class="flex items-center gap-2">
+              <svg class="w-5 h-5 text-slate-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 20l4-16m2 16l4-16M6 9h14M4 15h14"/></svg>
+              <input v-model.trim="jumpId" type="text" inputmode="text" placeholder="章節-題號，例如 2-5" class="flex-1 bg-transparent outline-none text-sm placeholder:text-slate-500">
+              <button v-if="jumpId" @click="jumpId=''" class="text-xs text-slate-400 hover:text-slate-200">清除</button>
+            </div>
+            <p v-if="jumpId && !jumpQuestion" class="text-xs text-slate-500 mt-2">找不到，請輸入格式：章節-題號（如 2-5）</p>
+            <button v-if="jumpQuestion" @click="quickPractice(jumpQuestion)" class="mt-2.5 w-full text-left bg-slate-800 border border-slate-700 rounded-xl p-3 transition-colors hover:bg-slate-700/70 hover:border-slate-600">
+              <div class="flex items-center gap-2 mb-1.5">
+                <span class="text-xs bg-slate-700 text-slate-300 px-1.5 py-0.5 rounded font-mono">CH{{jumpQuestion.chapter}}</span>
+                <span class="text-xs text-slate-500">題號 {{jumpQuestion.id}}</span>
+                <span class="ml-auto text-xs text-blue-400">快速作答</span>
+              </div>
+              <p class="text-sm text-slate-300 leading-relaxed line-clamp-2">{{jumpQuestion.question}}</p>
+            </button>
           </div>
 
           <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
