@@ -63,7 +63,8 @@ self.addEventListener('fetch', e => {
       if (cached) return cached;
       return fetch(e.request).then(res => {
         if (res.ok && e.request.method === 'GET') {
-          caches.open(CACHE).then(c => c.put(e.request, res.clone()));
+          const cloned = res.clone();
+          caches.open(CACHE).then(c => c.put(e.request, cloned));
         }
         return res;
       }).catch(() => cached || new Response('離線中，請稍後再試', { status: 503 }));
