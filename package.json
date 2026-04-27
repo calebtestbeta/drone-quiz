@@ -1,0 +1,24 @@
+{
+  "name": "drone-quiz",
+  "version": "1.0.0",
+  "description": "台灣遙控無人機操作證學科考試練習平台，588 道題目、四個章節，支援多種練習模式與 PWA 離線使用。",
+  "main": "game-mission.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/calebtestbeta/drone-quiz.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/calebtestbeta/drone-quiz/issues"
+  },
+  "homepage": "https://github.com/calebtestbeta/drone-quiz#readme",
+  "devDependencies": {
+    "sharp": "^0.34.5"
+  }
+}
