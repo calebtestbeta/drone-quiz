@@ -18,7 +18,7 @@
         'border-red-500','bg-red-900/40','text-red-300','bg-red-900/20','border-red-800/50','text-red-400',
         'border-blue-500','bg-blue-900/30','text-blue-300','bg-blue-900/40','border-blue-700/50',
         'border-amber-700/50','bg-amber-900/20','text-amber-400','bg-amber-600/20','bg-amber-600/30','border-amber-600/50','text-amber-300',
-        'text-slate-500','bg-slate-800/50','animate-pulse',
+        'text-slate-100','text-slate-500','bg-slate-800/50','animate-pulse','hover:border-slate-500',
         'bg-purple-900/50','bg-red-900/50','bg-red-600','hover:bg-red-500','hover:bg-red-900/30',
         'bg-emerald-600','hover:bg-emerald-500','bg-emerald-500','text-emerald-400','bg-emerald-900/50',
         'bg-emerald-900/40','text-emerald-300','bg-emerald-900/20','border-emerald-700/50','border-emerald-800/50',
@@ -149,7 +149,8 @@
       return m === 'normal' ? 'dq_seq_pos_n' : 'dq_seq_pos';
     }
     function ck(chs) { return Array.isArray(chs) ? chs.join(',') : String(chs); }
-    function getPos(chs) { return load(key())?.[ck(chs)] ?? null; }
+    function isValidPos(p) { return p && typeof p.idx === 'number' && typeof p.total === 'number'; }
+    function getPos(chs) { const p = load(key())?.[ck(chs)] ?? null; return isValidPos(p) ? p : null; }
     function setPos(chs, idx, total) {
       const d = load(key()) || {};
       d[ck(chs)] = { idx, total, at: Date.now() };
@@ -160,7 +161,13 @@
       delete d[ck(chs)];
       save(key(), d);
     }
-    function allPos() { return load(key()) || {}; }
+    function allPos() {
+      const d = load(key()) || {};
+      const cleaned = {}; let dirty = false;
+      Object.entries(d).forEach(([k, v]) => { if (isValidPos(v)) cleaned[k] = v; else dirty = true; });
+      if (dirty) save(key(), cleaned);
+      return cleaned;
+    }
     function clearAllPos() { save(key(), {}); }
     return { getPos, setPos, clearPos, allPos, clearAllPos };
   }
@@ -396,7 +403,17 @@
       const maxQ = computed(()=>Math.min(avail.value, type==='timed'?100:200));
       const canStart = computed(()=> type==='wrong'?p.wrong.length>0:selCh.value.length>0);
       const seqPos = useSeqPos(mode);
-      const savedPos = computed(() => type === 'chapter_seq' ? seqPos.getPos(selCh.value) : null);
+      const allSavedPos = computed(() => {
+        if (type !== 'chapter_seq') return [];
+        const all = seqPos.allPos();
+        return Object.entries(all).map(([key, pos]) => ({
+          key,
+          chs: key.split(',').map(Number),
+          chLabel: key.split(',').length === 4 ? '全部章節' : '第 ' + key.split(',').join('、') + ' 章',
+          idx: pos.idx, total: pos.total,
+          pct: Math.round(pos.idx / Math.max(pos.total, 1) * 100),
+        })).sort((a, b) => b.idx - a.idx);
+      });
 
       function toggleCh(n) {
         const i = selCh.value.indexOf(n);
@@ -407,7 +424,10 @@
         const count = type==='chapter_seq'?null : type==='wrong'?p.wrong.length : Math.min(qCount.value, avail.value);
         p.nav('quiz',{ type, chapters: type==='wrong'?[]:selCh.value, count, timeSec: type==='timed'?p.cfg.exam_min*60:0, showExp: type!=='timed', mode: mode.value, resumeFrom });
       }
-      return { type, selCh, qCount, info, avail, maxQ, canStart, toggleCh, start, chapters, isNormal, savedPos };
+      function continueFrom(chs, idx) {
+        p.nav('quiz',{ type, chapters: chs, count: null, timeSec: 0, showExp: true, mode: mode.value, resumeFrom: idx });
+      }
+      return { type, selCh, qCount, info, avail, maxQ, canStart, toggleCh, start, continueFrom, allSavedPos, chapters, isNormal };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -419,6 +439,25 @@
         <span class="ml-auto text-xs px-2 py-0.5 rounded-full font-medium" :class="isNormal?'bg-emerald-900/50 text-emerald-400':'bg-blue-900/50 text-blue-400'">{{isNormal?'普通操作證':'專業操作證'}}</span>
       </div>
       <div class="flex-1 overflow-y-auto px-4 py-4 space-y-5">
+        <template v-if="type==='chapter_seq' && allSavedPos.length>0">
+          <div>
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">已儲存的練習進度</p>
+            <div class="space-y-2">
+              <div v-for="pos in allSavedPos" :key="pos.key" class="bg-slate-900 border border-slate-700 rounded-xl p-3">
+                <div class="flex items-center justify-between gap-3">
+                  <div class="min-w-0">
+                    <div class="text-sm font-medium text-slate-200">{{pos.chLabel}}</div>
+                    <div class="text-xs text-slate-400 mt-0.5">已完成 {{pos.idx}} / {{pos.total}} 題・{{pos.pct}}%</div>
+                  </div>
+                  <button @click="continueFrom(pos.chs, pos.idx)" :class="isNormal?'bg-emerald-600 hover:bg-emerald-500':'bg-blue-600 hover:bg-blue-500'" class="text-xs text-white px-3 py-1.5 rounded-lg font-medium transition-colors flex-shrink-0">繼續</button>
+                </div>
+                <div class="mt-2 h-1 bg-slate-800 rounded-full overflow-hidden">
+                  <div class="h-full rounded-full" :class="isNormal?'bg-emerald-500':'bg-blue-500'" :style="{width: pos.pct + '%'}"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </template>
         <template v-if="type!=='wrong'">
           <div>
             <div class="flex justify-between items-center mb-3">
@@ -455,18 +494,6 @@
             <p class="text-sm text-slate-400 mt-1">將練習所有曾答錯的題目</p>
           </div>
         </template>
-        <div v-if="type==='chapter_seq' && savedPos" class="bg-blue-900/20 border border-blue-700/50 rounded-xl p-4">
-          <div class="flex items-center justify-between gap-3">
-            <div>
-              <div class="text-sm font-semibold text-blue-300">找到上次練習進度</div>
-              <div class="text-xs text-slate-400 mt-1">已完成 {{savedPos.idx}} / {{savedPos.total}} 題</div>
-            </div>
-            <div class="flex gap-2 flex-shrink-0">
-              <button @click="start(0)" class="text-xs bg-slate-700 hover:bg-slate-600 text-slate-300 px-3 py-1.5 rounded-lg transition-colors">重頭開始</button>
-              <button @click="start(savedPos.idx)" :class="isNormal?'bg-emerald-600 hover:bg-emerald-500':'bg-blue-600 hover:bg-blue-500'" class="text-xs text-white px-3 py-1.5 rounded-lg font-medium transition-colors">繼續上次</button>
-            </div>
-          </div>
-        </div>
         <div class="bg-slate-900 border border-slate-800 rounded-xl p-4 space-y-2.5">
           <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">練習摘要</p>
           <div v-if="type!=='wrong'" class="flex justify-between text-sm"><span class="text-slate-400">章節</span><span>第 {{selCh.join('、')}} 章</span></div>
@@ -488,7 +515,7 @@
     props: ['params','wrong','onRecord','nav'],
     setup(p) {
       const { type, chapters, count, timeSec, showExp, gids } = p.params;
-      const resumeFrom = p.params.resumeFrom ?? 0;
+      const resumeFrom = typeof p.params.resumeFrom === 'number' ? p.params.resumeFrom : 0;
       const loading = ref(true);
       const errMsg = ref('');
       const qs = ref([]);
@@ -633,7 +660,7 @@
             </div>
             <p class="text-base text-slate-100 leading-relaxed mb-5">{{q.question}}</p>
             <div class="space-y-2.5">
-              <button v-for="opt in ['A','B','C','D']" :key="opt" @click="pick(opt)" :class="optCls(opt)" class="w-full border rounded-xl px-4 py-3.5 text-left transition-all duration-150 flex gap-3 items-start">
+              <button v-for="opt in ['A','B','C','D']" :key="opt" @click="pick(opt)" :class="optCls(opt)" class="w-full border rounded-xl px-4 py-3.5 text-left transition-colors duration-150 flex gap-3 items-start">
                 <span class="flex-shrink-0 w-6 h-6 rounded-full border text-xs font-bold flex items-center justify-center mt-0.5" :class="answered&&opt===correct?'border-green-500 text-green-300 bg-green-900/50':answered&&opt===sel?'border-red-500 text-red-300 bg-red-900/50':'border-current'">{{opt}}</span>
                 <span class="text-sm leading-relaxed flex-1">{{q.options[opt]}}</span>
                 <svg v-if="answered&&opt===correct" class="flex-shrink-0 w-5 h-5 text-green-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
