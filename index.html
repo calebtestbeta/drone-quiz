@@ -13,6 +13,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
+      future: { hoverOnlyWhenSupported: true },
       safelist: [
         'border-green-500','bg-green-900/40','text-green-300','bg-green-900/20','border-green-700/50','text-green-400','border-green-800/50','bg-green-900/50',
         'border-red-500','bg-red-900/40','text-red-300','bg-red-900/20','border-red-800/50','text-red-400',
@@ -136,8 +137,8 @@
 
   // ── useSettings ───────────────────────────────────────────────
   function useSettings() {
-    const defaults = { exam_min: 60, exam_count: 60, show_exp: true };
-    const cfg = ref(load('dq_settings', defaults));
+    const defaults = { exam_min: 60, exam_count: 60, exam_min_n: 60, exam_count_n: 20, show_exp: true };
+    const cfg = ref({ ...defaults, ...load('dq_settings', {}) });
     function persist() { save('dq_settings', cfg.value); }
     return { cfg, persist };
   }
@@ -397,7 +398,9 @@
       const isNormal = computed(() => mode.value === 'normal');
       const type = p.params.type;
       const selCh = ref(type==='wrong'?[]:( p.params.chapters?.length ? p.params.chapters : [1,2,3,4]));
-      const qCount = ref(p.params.count ?? (type==='timed'?p.cfg.exam_count:20));
+      const examMin = computed(() => isNormal.value ? p.cfg.exam_min_n : p.cfg.exam_min);
+      const examCount = computed(() => isNormal.value ? p.cfg.exam_count_n : p.cfg.exam_count);
+      const qCount = ref(p.params.count ?? (type==='timed'?examCount.value:20));
       const info = { chapter_seq:{icon:'📖',title:'章節循序練習'}, random:{icon:'🎲',title:'隨機抽題練習'}, timed:{icon:'⏱️',title:'限時模擬考試'}, wrong:{icon:'🔁',title:'錯題複習'} };
       const avail = computed(()=> type==='wrong'?p.wrong.length : chapters.value.filter(c=>selCh.value.includes(c.num)).reduce((s,c)=>s+c.total,0));
       const maxQ = computed(()=>Math.min(avail.value, type==='timed'?100:200));
@@ -422,12 +425,12 @@
       }
       function start(resumeFrom = 0) {
         const count = type==='chapter_seq'?null : type==='wrong'?p.wrong.length : Math.min(qCount.value, avail.value);
-        p.nav('quiz',{ type, chapters: type==='wrong'?[]:selCh.value, count, timeSec: type==='timed'?p.cfg.exam_min*60:0, showExp: type!=='timed', mode: mode.value, resumeFrom });
+        p.nav('quiz',{ type, chapters: type==='wrong'?[]:selCh.value, count, timeSec: type==='timed'?examMin.value*60:0, showExp: type!=='timed', mode: mode.value, resumeFrom });
       }
       function continueFrom(chs, idx) {
         p.nav('quiz',{ type, chapters: chs, count: null, timeSec: 0, showExp: true, mode: mode.value, resumeFrom: idx });
       }
-      return { type, selCh, qCount, info, avail, maxQ, canStart, toggleCh, start, continueFrom, allSavedPos, chapters, isNormal };
+      return { type, selCh, qCount, info, avail, maxQ, canStart, toggleCh, start, continueFrom, allSavedPos, chapters, isNormal, examMin };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -498,7 +501,7 @@
           <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">練習摘要</p>
           <div v-if="type!=='wrong'" class="flex justify-between text-sm"><span class="text-slate-400">章節</span><span>第 {{selCh.join('、')}} 章</span></div>
           <div class="flex justify-between text-sm"><span class="text-slate-400">題目數</span><span>{{type==='chapter_seq'?avail:type==='wrong'?wrong.length:Math.min(qCount,maxQ)}} 題</span></div>
-          <div class="flex justify-between text-sm"><span class="text-slate-400">計時</span><span>{{type==='timed'?cfg.exam_min+' 分鐘':'不限時'}}</span></div>
+          <div class="flex justify-between text-sm"><span class="text-slate-400">計時</span><span>{{type==='timed'?examMin+' 分鐘':'不限時'}}</span></div>
           <div class="flex justify-between text-sm"><span class="text-slate-400">答錯說明</span><span>{{type==='timed'?'完成後顯示':'即時顯示'}}</span></div>
         </div>
       </div>
@@ -546,7 +549,7 @@
           let list;
           if (type === 'wrong') {
             const all = await loadChapters([1,2,3,4], qMode);
-            const wset = new Set(p.wrong);
+            const wset = new Set(gids?.length ? gids : p.wrong);
             list = all.filter(q => wset.has(q.gid));
           } else if (type === 'search') {
             const all = await loadChapters([1,2,3,4], qMode);
@@ -660,7 +663,7 @@
             </div>
             <p class="text-base text-slate-100 leading-relaxed mb-5">{{q.question}}</p>
             <div class="space-y-2.5">
-              <button v-for="opt in ['A','B','C','D']" :key="opt" @click="pick(opt)" :class="optCls(opt)" class="w-full border rounded-xl px-4 py-3.5 text-left transition-colors duration-150 flex gap-3 items-start">
+              <button v-for="opt in ['A','B','C','D']" :key="q.gid+opt" @click="pick(opt)" :class="optCls(opt)" class="w-full border rounded-xl px-4 py-3.5 text-left transition-colors duration-150 flex gap-3 items-start">
                 <span class="flex-shrink-0 w-6 h-6 rounded-full border text-xs font-bold flex items-center justify-center mt-0.5" :class="answered&&opt===correct?'border-green-500 text-green-300 bg-green-900/50':answered&&opt===sel?'border-red-500 text-red-300 bg-red-900/50':'border-current'">{{opt}}</span>
                 <span class="text-sm leading-relaxed flex-1">{{q.options[opt]}}</span>
                 <svg v-if="answered&&opt===correct" class="flex-shrink-0 w-5 h-5 text-green-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
@@ -757,7 +760,11 @@
         }
         p.nav('setup', { type, chapters, count });
       }
-      return { pct, passed, dur, byChapter, wrong, noAns, type, showExp, chapters, count, retry };
+      function reviewWrong() {
+        const g = wrong.value.map(q => q.gid);
+        p.nav('quiz', { type: 'wrong', chapters: [], count: g.length, gids: g, timeSec: 0, showExp: true, mode: qMode });
+      }
+      return { pct, passed, dur, byChapter, wrong, noAns, type, showExp, chapters, count, retry, reviewWrong };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -806,7 +813,7 @@
         </div>
       </div>
       <div class="flex-shrink-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3 space-y-2">
-        <button v-if="wrong.length>0" @click="nav('setup',{type:'wrong'})" class="w-full bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/50 text-amber-300 py-3 rounded-xl text-sm font-medium transition-colors">複習本次錯題（{{wrong.length}} 題）</button>
+        <button v-if="wrong.length>0" @click="reviewWrong" class="w-full bg-amber-600/20 hover:bg-amber-600/30 border border-amber-600/50 text-amber-300 py-3 rounded-xl text-sm font-medium transition-colors">複習本次錯題（{{wrong.length}} 題）</button>
         <div class="flex gap-2">
           <button @click="retry" class="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 py-3 rounded-xl text-sm font-medium text-slate-300">再練一次</button>
           <button @click="nav('home')" class="flex-1 bg-blue-600 hover:bg-blue-500 py-3 rounded-xl text-sm font-semibold text-white">回首頁</button>
@@ -924,6 +931,10 @@
   const SettingsView = {
     props: ['cfg','nav','onSave'],
     setup(p) {
+      const mode = inject('mode');
+      const isNormal = computed(() => mode.value === 'normal');
+      const minKey = computed(() => isNormal.value ? 'exam_min_n' : 'exam_min');
+      const countKey = computed(() => isNormal.value ? 'exam_count_n' : 'exam_count');
       const local = ref({ ...p.cfg });
       function save() { Object.assign(p.cfg, local.value); p.onSave(); p.nav('home'); }
       const refreshing = ref(false);
@@ -940,7 +951,7 @@
         }
         window.location.reload();
       }
-      return { local, save, forceRefresh, refreshing };
+      return { local, save, forceRefresh, refreshing, isNormal, minKey, countKey };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -952,16 +963,19 @@
       </div>
       <div class="flex-1 overflow-y-auto px-4 py-4 space-y-5">
         <div>
-          <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">限時考試設定</p>
+          <div class="flex items-center justify-between mb-3">
+            <p class="text-xs font-semibold text-slate-400 uppercase tracking-wide">限時考試設定</p>
+            <span class="text-xs px-2 py-0.5 rounded-full font-medium" :class="isNormal?'bg-emerald-900/50 text-emerald-400':'bg-blue-900/50 text-blue-400'">{{isNormal?'普通操作證':'專業操作證'}}</span>
+          </div>
           <div class="bg-slate-900 border border-slate-800 rounded-xl divide-y divide-slate-800">
             <div class="p-4">
-              <div class="flex justify-between mb-3"><label class="text-sm">考試時間</label><span class="text-sm font-bold text-blue-400">{{local.exam_min}} 分鐘</span></div>
-              <input type="range" v-model.number="local.exam_min" min="30" max="120" step="5" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+              <div class="flex justify-between mb-3"><label class="text-sm">考試時間</label><span class="text-sm font-bold text-blue-400">{{local[minKey]}} 分鐘</span></div>
+              <input type="range" v-model.number="local[minKey]" min="30" max="120" step="5" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
               <div class="flex justify-between text-xs text-slate-500 mt-1"><span>30 分</span><span>120 分</span></div>
             </div>
             <div class="p-4">
-              <div class="flex justify-between mb-3"><label class="text-sm">考試題數</label><span class="text-sm font-bold text-blue-400">{{local.exam_count}} 題</span></div>
-              <input type="range" v-model.number="local.exam_count" min="20" max="100" step="5" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
+              <div class="flex justify-between mb-3"><label class="text-sm">考試題數</label><span class="text-sm font-bold text-blue-400">{{local[countKey]}} 題</span></div>
+              <input type="range" v-model.number="local[countKey]" min="20" max="100" step="5" class="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-blue-500">
               <div class="flex justify-between text-xs text-slate-500 mt-1"><span>20 題</span><span>100 題</span></div>
             </div>
           </div>

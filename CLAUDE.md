@@ -18,7 +18,7 @@
 | `dq_progress` | `{ [gid]: { attempts, correct, last, ok, at } }` |
 | `dq_wrong` | `string[]`（gid 陣列） |
 | `dq_sessions` | `SessionRecord[]`（最多 50 筆） |
-| `dq_settings` | `{ exam_min, exam_count, show_exp }` |
+| `dq_settings` | `{ exam_min, exam_count, exam_min_n, exam_count_n, show_exp }`（`_n` 為普通操作證，考試題數預設 20） |
 
 全域題目 ID（gid）格式：`"${chapter}_${id}"`，例如第2章第5題 → `"2_5"`
 
