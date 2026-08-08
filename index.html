@@ -103,12 +103,17 @@
       prog.value = load(m === 'normal' ? 'dq_progress_n' : 'dq_progress', {});
       wrong.value = load(m === 'normal' ? 'dq_wrong_n' : 'dq_wrong', []);
     });
-    function record(gid, sel, ans) {
+    function record(gid, sel, ans, clearWrongOnOk = false) {
       const e = prog.value[gid] || { attempts: 0, correct: 0 };
       const ok = sel === ans;
       prog.value[gid] = { attempts: e.attempts + 1, correct: e.correct + (ok ? 1 : 0), last: sel, ok, at: Date.now() };
       save(progKey(), prog.value);
-      if (!ok && !wrong.value.includes(gid)) { wrong.value.push(gid); save(wrongKey(), wrong.value); }
+      if (!ok) {
+        if (!wrong.value.includes(gid)) { wrong.value.push(gid); save(wrongKey(), wrong.value); }
+      } else if (clearWrongOnOk) {
+        const i = wrong.value.indexOf(gid);
+        if (i >= 0) { wrong.value.splice(i, 1); save(wrongKey(), wrong.value); }
+      }
     }
     function chStat(n) {
       const pfx = prefix();
@@ -576,7 +581,7 @@
       function pick(opt) {
         if (answered.value) return;
         ans.value[q.value.gid] = opt;
-        p.onRecord(q.value.gid, opt, correct.value);
+        p.onRecord(q.value.gid, opt, correct.value, type === 'wrong');
         if (type === 'chapter_seq') {
           seqPos.setPos(chapters, resumeFrom + idx.value + 1, resumeFrom + qs.value.length);
         }
