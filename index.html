@@ -575,30 +575,34 @@
           loading.value = false;
         }
       });
-      let autoAdvTimer = null;
-      onUnmounted(() => { timer.stop(); if (autoAdvTimer) clearTimeout(autoAdvTimer); });
+      onUnmounted(() => timer.stop());
 
       function pick(opt) {
+        if (!showExp) { ans.value[q.value.gid] = opt; return; }
         if (answered.value) return;
         ans.value[q.value.gid] = opt;
         p.onRecord(q.value.gid, opt, correct.value, type === 'wrong');
         if (type === 'chapter_seq') {
           seqPos.setPos(chapters, resumeFrom + idx.value + 1, resumeFrom + qs.value.length);
         }
-        if (!showExp) autoAdvTimer = setTimeout(advance, 250);
-        else if (opt !== correct.value) navigator.vibrate?.(50);
+        if (opt !== correct.value) navigator.vibrate?.(50);
       }
 
+      const showSubmit = ref(false);
+      const unanswered = computed(() => qs.value.filter(q => !ans.value[q.gid]).length);
       function advance() {
-        if (idx.value < qs.value.length - 1) idx.value++;
-        else finish(false);
+        if (idx.value < qs.value.length - 1) { idx.value++; return; }
+        if (!showExp && unanswered.value > 0) { showSubmit.value = true; return; }
+        finish(false);
       }
 
       function back() { if (idx.value > 0) idx.value--; }
 
       function finish(timeUp) {
         timer.stop();
+        showSubmit.value = false;
         if (type === 'chapter_seq') seqPos.clearPos(chapters);
+        if (!showExp) qs.value.forEach(qq => { if (ans.value[qq.gid]) p.onRecord(qq.gid, ans.value[qq.gid], qq.answer); });
         const total = qs.value.length;
         const score = qs.value.filter(q => ans.value[q.gid] === q.answer).length;
         p.nav('result', { type, chapters, count, questions: qs.value, answers: ans.value, total, score, timeUp,
@@ -606,10 +610,19 @@
       }
 
       function optCls(opt) {
+        if (!showExp) return opt === sel.value
+          ? 'border-blue-500 bg-blue-900/30 text-blue-300 cursor-pointer'
+          : 'border-slate-700 bg-slate-800 hover:bg-slate-700 hover:border-slate-500 text-slate-100 cursor-pointer';
         if (!answered.value) return 'border-slate-700 bg-slate-800 hover:bg-slate-700 hover:border-slate-500 text-slate-100 cursor-pointer';
         if (opt === correct.value) return 'border-green-500 bg-green-900/40 text-green-300 cursor-default';
         if (opt === sel.value) return 'border-red-500 bg-red-900/40 text-red-300 cursor-default';
         return 'border-slate-700 bg-slate-800/50 text-slate-500 cursor-default';
+      }
+      function markCls(opt) {
+        if (!showExp) return opt === sel.value ? 'border-blue-500 text-blue-300 bg-blue-900/40' : 'border-current';
+        if (answered.value && opt === correct.value) return 'border-green-500 text-green-300 bg-green-900/50';
+        if (answered.value && opt === sel.value) return 'border-red-500 text-red-300 bg-red-900/50';
+        return 'border-current';
       }
 
       const timerCls = computed(() => ({ ok:'text-slate-300', warn:'text-amber-400', crit:'text-red-400 animate-pulse' }[timer.warn.value]));
@@ -635,7 +648,7 @@
         });
       }
 
-      return { loading, errMsg, qs, idx, ans, q, sel, correct, answered, isOk, progress, timer, timerCls, showExit, type, showExp, pick, advance, back, finish, optCls, copyToast, openAI, copyPrompt };
+      return { loading, errMsg, qs, idx, ans, q, sel, correct, answered, isOk, progress, timer, timerCls, showExit, showSubmit, unanswered, type, showExp, pick, advance, back, finish, optCls, markCls, copyToast, openAI, copyPrompt };
     },
     template: `
     <div class="flex flex-col h-full">
@@ -669,10 +682,10 @@
             <p class="text-base text-slate-100 leading-relaxed mb-5">{{q.question}}</p>
             <div class="space-y-2.5">
               <button v-for="opt in ['A','B','C','D']" :key="q.gid+opt" @click="pick(opt)" :class="optCls(opt)" class="w-full border rounded-xl px-4 py-3.5 text-left transition-colors duration-150 flex gap-3 items-start">
-                <span class="flex-shrink-0 w-6 h-6 rounded-full border text-xs font-bold flex items-center justify-center mt-0.5" :class="answered&&opt===correct?'border-green-500 text-green-300 bg-green-900/50':answered&&opt===sel?'border-red-500 text-red-300 bg-red-900/50':'border-current'">{{opt}}</span>
+                <span class="flex-shrink-0 w-6 h-6 rounded-full border text-xs font-bold flex items-center justify-center mt-0.5" :class="markCls(opt)">{{opt}}</span>
                 <span class="text-sm leading-relaxed flex-1">{{q.options[opt]}}</span>
-                <svg v-if="answered&&opt===correct" class="flex-shrink-0 w-5 h-5 text-green-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
-                <svg v-if="answered&&opt===sel&&opt!==correct" class="flex-shrink-0 w-5 h-5 text-red-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
+                <svg v-if="showExp&&answered&&opt===correct" class="flex-shrink-0 w-5 h-5 text-green-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                <svg v-if="showExp&&answered&&opt===sel&&opt!==correct" class="flex-shrink-0 w-5 h-5 text-red-400 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
               </button>
             </div>
             <transition name="fade">
@@ -707,16 +720,28 @@
         </div>
         <div class="absolute bottom-0 left-0 right-0 safe-bottom border-t border-slate-800 bg-slate-950 px-4 py-3">
           <div class="flex gap-2.5 max-w-2xl mx-auto">
-            <button v-if="showExp" @click="back" :disabled="idx===0" :class="idx===0?'opacity-30 cursor-not-allowed':'hover:bg-slate-700'" class="flex-none w-12 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-center transition-colors">
+            <button @click="back" :disabled="idx===0" :class="idx===0?'opacity-30 cursor-not-allowed':'hover:bg-slate-700'" class="flex-none w-12 bg-slate-800 border border-slate-700 rounded-xl flex items-center justify-center transition-colors">
               <svg class="w-5 h-5 text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/></svg>
             </button>
             <button @click="advance" :class="(answered||!showExp)?'bg-blue-600 hover:bg-blue-500 text-white font-semibold':'bg-slate-800 border border-slate-700 text-slate-500'" class="flex-1 rounded-xl py-3.5 text-sm transition-colors flex items-center justify-center gap-2">
-              {{idx===qs.length-1?'完成答題':'下一題'}}
+              {{idx===qs.length-1?(showExp?'完成答題':'交卷'):'下一題'}}
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
             </button>
           </div>
         </div>
       </template>
+      <transition name="fade">
+        <div v-if="showSubmit" class="fixed inset-0 bg-black/70 flex items-end justify-center z-50" @click.self="showSubmit=false">
+          <div class="bg-slate-900 border border-slate-700 rounded-t-2xl w-full max-w-lg p-6 pb-safe">
+            <h3 class="text-lg font-semibold mb-2">確定交卷？</h3>
+            <p class="text-sm text-slate-400 mb-5">尚有 {{unanswered}} 題未作答，交卷後未作答的題目將不計分</p>
+            <div class="flex gap-3">
+              <button @click="showSubmit=false" class="flex-1 bg-slate-800 border border-slate-700 py-3 rounded-xl text-slate-300 font-medium hover:bg-slate-700">繼續作答</button>
+              <button @click="finish(false)" class="flex-1 bg-blue-600 hover:bg-blue-500 py-3 rounded-xl text-white font-medium">交卷</button>
+            </div>
+          </div>
+        </div>
+      </transition>
       <transition name="fade">
         <div v-if="showExit" class="fixed inset-0 bg-black/70 flex items-end justify-center z-50" @click.self="showExit=false">
           <div class="bg-slate-900 border border-slate-700 rounded-t-2xl w-full max-w-lg p-6 pb-safe">
