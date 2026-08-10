@@ -606,7 +606,7 @@
         const total = qs.value.length;
         const score = qs.value.filter(q => ans.value[q.gid] === q.answer).length;
         p.nav('result', { type, chapters, count, questions: qs.value, answers: ans.value, total, score, timeUp,
-          duration: Math.floor((Date.now()-startAt.value)/1000), showExp });
+          duration: Math.floor((Date.now()-startAt.value)/1000), showExp, mode: qMode });
       }
 
       function optCls(opt) {
