@@ -2,9 +2,9 @@
   "name": "drone-quiz",
   "version": "1.0.0",
   "description": "台灣遙控無人機操作證學科考試練習平台，588 道題目、四個章節，支援多種練習模式與 PWA 離線使用。",
-  "main": "game-mission.js",
+  "main": "game/app.mjs",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/practical/*.test.mjs"
   },
   "repository": {
     "type": "git",

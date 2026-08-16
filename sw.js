@@ -1,13 +1,26 @@
-const CACHE = 'drone-quiz-v3';
+const CACHE = 'drone-quiz-v6';
 const CDN_CACHE = 'drone-quiz-cdn-v1';
+const CDN_PRECACHE = [
+  'https://unpkg.com/three@0.160.1/build/three.min.js',
+];
 
 const PRECACHE = [
   '/',
   '/index.html',
   '/manifest.json',
   '/game.html',
-  '/game-scene.js',
-  '/game-mission.js',
+  '/game/game.css',
+  '/game/app.mjs',
+  '/game/state.mjs',
+  '/game/input-controller.mjs',
+  '/game/flight-controller.mjs',
+  '/game/scene.mjs',
+  '/game/camera-controller.mjs',
+  '/game/ui-controller.mjs',
+  '/game/mission-definitions.mjs',
+  '/game/mission-engine.mjs',
+  '/game/scoring.mjs',
+  '/game/session-store.mjs',
   '/exam_ch1.json',
   '/exam_ch2.json',
   '/exam_ch3.json',
@@ -22,8 +35,10 @@ const CDN_ORIGINS = ['cdn.tailwindcss.com', 'unpkg.com'];
 
 self.addEventListener('install', e => {
   e.waitUntil(
-    caches.open(CACHE)
-      .then(c => c.addAll(PRECACHE))
+    Promise.all([
+      caches.open(CACHE).then(c => c.addAll(PRECACHE)),
+      caches.open(CDN_CACHE).then(c => c.addAll(CDN_PRECACHE)).catch(() => undefined),
+    ])
       .then(() => self.skipWaiting())
   );
 });

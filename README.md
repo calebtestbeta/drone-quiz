@@ -11,6 +11,7 @@
 - **題目搜尋與法規關鍵字索引** — 章節篩選、關鍵字搜尋、自動高頻詞索引
 - **學習統計** — 各章正確率、覆蓋率、歷次紀錄
 - **PWA** — 可加入主畫面，離線可用
+- **術科模擬器** — 自由飛行、基本操作與考試流程，支援固定考生站位及練習用俯視圖
 
 ## 題庫章節
 
@@ -37,7 +38,8 @@ python3 -m http.server 8080
 
 ## 技術架構
 
-- **前端：** Vue 3（CDN）+ Tailwind CSS（CDN），單一 `index.html`，無需 build step
+- **學科前端：** Vue 3（CDN）+ Tailwind CSS（CDN），單一 `index.html`
+- **術科前端：** Three.js（CDN）+ 瀏覽器原生 ES modules，無需 build step
 - **資料：** 靜態 JSON，`exam_ch1.json` ~ `exam_ch4.json`
 - **狀態：** localStorage（答題進度、錯題集、歷次紀錄、設定）
 - **PWA：** Service Worker + Web App Manifest，Cache First 策略
@@ -47,6 +49,8 @@ python3 -m http.server 8080
 ```
 drone-quiz/
 ├── index.html          # 主應用程式（所有 Vue 元件與邏輯）
+├── game.html           # 術科模擬器頁面骨架
+├── game/               # 術科狀態、輸入、物理、場景、相機、任務、評分與儲存模組
 ├── manifest.json       # PWA manifest
 ├── sw.js               # Service Worker
 ├── exam_ch1.json       # 第一章題庫
@@ -54,6 +58,18 @@ drone-quiz/
 ├── exam_ch3.json       # 第三章題庫
 ├── exam_ch4.json       # 第四章題庫
 └── icons/              # PWA 圖示
+```
+
+## 術科模擬器
+
+- 自由練習保留跟隨、FPV、俯視三種視角。
+- 基本操作與考試練習使用固定考生站位視角；鏡頭位置固定並平順追蹤無人機。
+- 基本操作可切換固定考場俯視小畫面；考試練習不提供俯視輔助。
+- 考試五項各 20 分，單項失敗為 0 分並繼續，總分 60 分通過。
+- 完成摘要保存於 `dq_practical_sessions`，最多 50 筆，目前尚未提供歷史紀錄介面。
+
+```bash
+npm test
 ```
 
 ## 授權聲明
